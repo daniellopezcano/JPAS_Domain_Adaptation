@@ -215,7 +215,7 @@ def train_single_epoch(
         logits = model_downstream(features)
 
         # === Loss ===
-        loss = loss_functions.cross_entropy(yy_true, logits, loss_function_dict["class_weights"])
+        loss = loss_functions.cross_entropy(yy_true, logits, loss_function_dict["class_weights"].to(device))
 
         # === Backprop ===
         loss.backward()
@@ -374,7 +374,7 @@ def eval_dataset(
         logits = model_downstream(features)
 
         # Compute loss
-        loss = loss_functions.cross_entropy(yy_true, logits, loss_function_dict["class_weights"])
+        loss = loss_functions.cross_entropy(yy_true, logits, loss_function_dict["class_weights"].to(device))
 
         metrics = {"loss": loss.item()}
 

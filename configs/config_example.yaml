@@ -8,7 +8,7 @@ global:
 # Data Configuration
 # ════════════════════════════════════════════════════════════════════
 data:
-  root_path: /home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/JPAS_photozs/DATA/Train-Validate-Test
+  root_path: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/DATA/noise_jpas_v1/Train-Validate-Test
 
   # ── JPAS dataset ──
   load_JPAS_data:
@@ -22,7 +22,7 @@ data:
     - name: train
       npy: mock_3_train.npy
       csv: props_training.csv
-      sample_percentage: 0.3
+      sample_percentage: 1.0
     - name: val
       npy: mock_3_validate.npy
       csv: props_validate.csv
@@ -69,31 +69,31 @@ models:
   path_load: null
 
   encoder:
-    hidden_layers: [64, 64, 16]
-    dropout_rates: [0.01, 0.01, 0.01]
+    hidden_layers: [64, 64, 32, 16]
+    dropout_rates: [0.02, 0.02, 0.02, 0.02]
     output_dim: 8
 
   downstream:
     hidden_layers: [32, 32]
-    dropout_rates: [0.01, 0.01]
+    dropout_rates: [0.02, 0.02]
 
 # ════════════════════════════════════════════════════════════════════
 # Training Configuration
 # ════════════════════════════════════════════════════════════════════
 training:
-  path_save: /home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/JPAS_photozs/JPAS_Domain_Adaptation/SAVED_models
+  path_save: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models
 
   sampling_strategy: true_random
   freeze_downstream_model: false
   
-  NN_epochs: 300
-  NN_batches_per_epoch: 4096
-  batch_size: 1024
+  NN_epochs: 400
+  NN_batches_per_epoch: 8192
+  batch_size: 2048
   batch_size_val: null
 
   lr: 0.01
-  weight_decay: 0.001
-  clip_grad_norm: 10.0
+  weight_decay: 0.0001
+  clip_grad_norm: 100.0
 
   seed_mode: deterministic
   seed: 0

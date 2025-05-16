@@ -1,0 +1,25 @@
+# Core libraries
+numpy>=1.21
+scipy>=1.7
+pandas>=1.3
+
+# PyTorch and training
+torch>=1.12
+torchvision>=0.13
+
+# Plotting and visualization
+matplotlib>=3.4
+
+# Jupyter + notebook tooling
+jupyterlab>=3.0
+ipykernel>=6.0
+
+# Logging and experiment tracking (optional)
+tqdm>=4.60
+wandb>=0.15  # Optional, if you're using Weights & Biases
+
+# Testing
+pytest>=7.0
+
+# Optional: ML utility packages
+scikit-learn>=1.0  # For metrics, confusion matrix, etc.

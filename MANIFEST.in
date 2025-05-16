@@ -1,0 +1,6 @@
+include README.md
+include LICENSE
+include requirements.txt
+
+recursive-include JPAS_DA/configs *.yml
+recursive-include JPAS_DA/models *.pt

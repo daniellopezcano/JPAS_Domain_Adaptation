@@ -172,3 +172,12 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# --- Project-specific ---
+SAVED_models/
+DATA/
+*.autosave.ipynb
+*.nbconvert.ipynb
+*.bak
+*.swp
+*.tmp

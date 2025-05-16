@@ -218,6 +218,7 @@ def wrapper_train_models_from_config(config_path, run_name):
 
     path_save = dict_training["path_save"]
     path_save = os.path.join(path_save, run_name)
+    config["training"]["path_save"] = path_save
 
     sampling_strategy = dict_training["sampling_strategy"]
     freeze_downstream_model = dict_training["freeze_downstream_model"]

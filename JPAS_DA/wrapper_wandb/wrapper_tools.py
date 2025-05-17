@@ -56,6 +56,9 @@ def wrapper_train_models(
     dset_loaders = wrapper_data_loaders.wrapper_data_loaders(**dict_data)
     dset_train = dset_loaders[key_survey_training]["train"]
     dset_val = dset_loaders[key_survey_training]["val"]
+    
+    # Return to default, makes my life far easier when reading back stored config files :D
+    dict_data["provided_normalization"] = None
 
     # ────────────────────────────────────────────────
     # 2. Infer dimensions and initialize models
@@ -205,14 +208,25 @@ def wrapper_train_models_from_config(config_path, run_name, default_overwrite=Tr
 
     path_load = dict_models["path_load"]
 
-    dict_encoder = dict_models["encoder"]
-    hidden_layers_encoder = dict_encoder["hidden_layers"]
-    dropout_rates_encoder = dict_encoder["dropout_rates"]
-    output_dim_encoder = dict_encoder["output_dim"]
+    if path_load is None:
+        dict_encoder = dict_models["encoder"]
+        hidden_layers_encoder = dict_encoder["hidden_layers"]
+        dropout_rates_encoder = dict_encoder["dropout_rates"]
+        output_dim_encoder = dict_encoder["output_dim"]
 
-    dict_downstream = dict_models["downstream"]
-    hidden_layers_downstream = dict_downstream["hidden_layers"]
-    dropout_rates_downstream = dict_downstream["dropout_rates"]
+        dict_downstream = dict_models["downstream"]
+        hidden_layers_downstream = dict_downstream["hidden_layers"]
+        dropout_rates_downstream = dict_downstream["dropout_rates"]
+
+    else:
+        dict_encoder = {}
+        hidden_layers_encoder = []
+        dropout_rates_encoder = []
+        output_dim_encoder = 0
+
+        dict_downstream = {}
+        hidden_layers_downstream = []
+        dropout_rates_downstream = []
 
     # === Training === #
     dict_training = config["training"]

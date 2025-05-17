@@ -176,6 +176,7 @@ cython_debug/
 # --- Project-specific ---
 SAVED_models/
 DATA/
+notebooks/wandb
 *.autosave.ipynb
 *.nbconvert.ipynb
 *.bak

@@ -1,0 +1,101 @@
+# ════════════════════════════════════════════════════════════════════
+# Global Configuration
+# ════════════════════════════════════════════════════════════════════
+global:
+  N_threads: 1
+
+# ════════════════════════════════════════════════════════════════════
+# Data Configuration
+# ════════════════════════════════════════════════════════════════════
+data:
+  root_path: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/DATA/noise_jpas_v1/Train-Validate-Test
+
+  # ── JPAS dataset ──
+  load_JPAS_data:
+    - name: all
+      npy: JPAS_DATA_Aper_Cor_3_FLUX+NOISE.npy
+      csv: JPAS_DATA_PROPERTIES.csv
+      sample_percentage: 1.0
+
+  # ── DESI dataset ──
+  load_DESI_data:
+    - name: train
+      npy: mock_3_train.npy
+      csv: props_training.csv
+      sample_percentage: 1.0
+    - name: val
+      npy: mock_3_validate.npy
+      csv: props_validate.csv
+      sample_percentage: 1.0
+    - name: test
+      npy: mock_3_test.npy
+      csv: props_test.csv
+      sample_percentage: 1.0
+
+  # ── Preprocessing ──
+  random_seed_load: 0
+  apply_masks:
+    - unreliable
+    - magic_numbers
+    - negative_errors
+    - nan_values
+    - apply_additional_filters
+  mask_indices: [0, -2]
+  magic_numbers: [-99, 99]
+  i_band_sn_threshold: 0.0
+  z_lim_QSO_cut: 2.2
+
+  # ── Train/val/test splits ──
+  train_ratio_both: 0.8
+  val_ratio_both: 0.1
+  test_ratio_both: 0.1
+  random_seed_split_both: 0
+
+  train_ratio_only_DESI: 0.8
+  val_ratio_only_DESI: 0.1
+  test_ratio_only_DESI: 0.1
+  random_seed_split_only_DESI: 0
+
+  # ── Input/output keys ──
+  keys_xx: [OBS, ERR, MORPHTYPE_int]
+  keys_yy: [SPECTYPE_int, TARGETID]
+  normalize: true
+  key_survey_training: DESI_combined # JPAS_matched, DESI_matched
+
+# ════════════════════════════════════════════════════════════════════
+# Model Architecture
+# ════════════════════════════════════════════════════════════════════
+models:
+  path_load: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models/09_wrapped_training_no_DA
+
+  # encoder:
+  #   hidden_layers: [64, 64, 32, 16]
+  #   dropout_rates: [0.02, 0.02, 0.02, 0.02]
+  #   output_dim: 8
+
+  # downstream:
+  #   hidden_layers: [32, 32]
+  #   dropout_rates: [0.02, 0.02]
+
+# ════════════════════════════════════════════════════════════════════
+# Training Configuration
+# ════════════════════════════════════════════════════════════════════
+training:
+  path_save: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models
+
+  sampling_strategy: true_random
+  freeze_downstream_model: false
+  
+  NN_epochs: 400
+  NN_batches_per_epoch: 8192
+  batch_size: 2048
+  batch_size_val: null
+
+  lr: 0.0009
+  weight_decay: 0.0001
+  clip_grad_norm: 100.0
+
+  seed_mode: deterministic
+  seed: 0
+
+  device: cuda

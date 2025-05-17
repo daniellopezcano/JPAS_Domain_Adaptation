@@ -32,6 +32,7 @@ def wrapper_train_models(
     path_save: str,
     batch_size_val: Optional[int] = None,
     device: Optional[str] = "cuda",
+    default_overwrite: Optional[bool] = False
 ):
     """
     Full training wrapper for encoder and downstream models.
@@ -145,7 +146,8 @@ def wrapper_train_models(
         path_save=path_save,
         config_encoder=config_encoder,
         config_downstream=config_downstream,
-        device=device
+        device=device,
+        default_overwrite=default_overwrite
     )
 
     return dset_train, dset_val, model_encoder, model_downstream, min_val_loss
@@ -166,8 +168,7 @@ def load_config_file(config_path: str) -> dict:
 
     config_path = Path(config_path)
     if not config_path.exists():
-        logging.error(f"❌ ERROR: Config file does not exist at {config_path}")
-        return None
+        raise ValueError("❌ ERROR: Config file does not exist at config_path")
 
     try:
         with config_path.open("r", encoding="utf-8") as f:
@@ -184,7 +185,7 @@ def load_config_file(config_path: str) -> dict:
         logging.error(f"❌ ERROR: Unexpected issue reading {config_path}: {e}")
         return None
 
-def wrapper_train_models_from_config(config_path, run_name):
+def wrapper_train_models_from_config(config_path, run_name, default_overwrite=True):
     """
     Wrapper to train models from config file
     """
@@ -237,7 +238,12 @@ def wrapper_train_models_from_config(config_path, run_name):
         dict_data, path_load, hidden_layers_encoder, dropout_rates_encoder, output_dim_encoder,
         hidden_layers_downstream, dropout_rates_downstream, sampling_strategy, freeze_downstream_model,
         NN_epochs, NN_batches_per_epoch, batch_size, lr, weight_decay, clip_grad_norm, seed_mode, seed, path_save,
-        batch_size_val=batch_size_val, device=device
+        batch_size_val=batch_size_val, device=device, default_overwrite=default_overwrite
     )
+
+    os.makedirs(path_save, exist_ok=True)
+    config_path = os.path.join(path_save, "config.yaml")
+    with open(config_path, "w") as f:
+        yaml.dump(config, f, sort_keys=False)
 
     return config, dset_train, dset_val, model_encoder, model_downstream, min_val_loss

@@ -339,7 +339,7 @@ def plot_confusion_matrix(
             if i == j:
                 ax.text(
                     j, i,
-                    f"{count}\nTPR:{recall[i]*100:.1f}%\nPPV:{precision[i]*100:.1f}%\nF1:{f1[i]:.1f}",
+                    f"{count}\nTPR:{recall[i]*100:.1f}%\nPPV:{precision[i]*100:.1f}%\nF1:{f1[i]:.2f}",
                     ha="center", va="center", color=text_color, fontsize=10, fontweight='bold'
                 )
             else:
@@ -487,70 +487,86 @@ def compute_ece(y_true, y_pred_P, n_bins=10):
             ece += np.abs(acc - conf) * np.sum(mask) / len(y_true)
     return ece
 
-def compare_val_test_performance(
-    yy_true_val,
-    yy_pred_P_val,
-    yy_true_test,
-    yy_pred_P_test,
+def compare_sets_performance(
+    yy_true_1,
+    yy_pred_P_1,
+    yy_true_2,
+    yy_pred_P_2,
     class_names=None,
+    name_1="Set 1",
+    name_2="Set 2",
     show_plot=True
 ):
     """
-    Compute and display performance difference between validation and test sets.
+    Compute and display performance difference between two sets (e.g., validation vs test).
+
+    Parameters
+    ----------
+    yy_true_1, yy_true_2 : array-like
+        Ground truth labels.
+    yy_pred_P_1, yy_pred_P_2 : array-like
+        Predicted probabilities.
+    class_names : list of str, optional
+        Names of classes for per-class TPR plot.
+    name_1, name_2 : str, optional
+        Names of the datasets being compared (default: "Set 1" and "Set 2").
+    show_plot : bool, optional
+        Whether to show the TPR difference bar plot.
     """
-    yy_pred_val = np.argmax(yy_pred_P_val, axis=1)
-    yy_pred_test = np.argmax(yy_pred_P_test, axis=1)
+    yy_pred_1 = np.argmax(yy_pred_P_1, axis=1)
+    yy_pred_2 = np.argmax(yy_pred_P_2, axis=1)
 
     # Accuracy
-    acc_val = accuracy_score(yy_true_val, yy_pred_val)
-    acc_test = accuracy_score(yy_true_test, yy_pred_test)
+    acc_1 = accuracy_score(yy_true_1, yy_pred_1)
+    acc_2 = accuracy_score(yy_true_2, yy_pred_2)
 
     # F1 (macro)
-    f1_val = f1_score(yy_true_val, yy_pred_val, average='macro', zero_division=0)
-    f1_test = f1_score(yy_true_test, yy_pred_test, average='macro', zero_division=0)
+    f1_1 = f1_score(yy_true_1, yy_pred_1, average='macro', zero_division=0)
+    f1_2 = f1_score(yy_true_2, yy_pred_2, average='macro', zero_division=0)
 
     # TPR/Recall (macro)
-    tpr_val = recall_score(yy_true_val, yy_pred_val, average=None, zero_division=0)
-    tpr_test = recall_score(yy_true_test, yy_pred_test, average=None, zero_division=0)
-    tpr_val_macro = np.mean(tpr_val)
-    tpr_test_macro = np.mean(tpr_test)
+    tpr_1 = recall_score(yy_true_1, yy_pred_1, average=None, zero_division=0)
+    tpr_2 = recall_score(yy_true_2, yy_pred_2, average=None, zero_division=0)
+    tpr_macro_1 = np.mean(tpr_1)
+    tpr_macro_2 = np.mean(tpr_2)
 
     # Precision (macro)
-    prec_val = precision_score(yy_true_val, yy_pred_val, average='macro', zero_division=0)
-    prec_test = precision_score(yy_true_test, yy_pred_test, average='macro', zero_division=0)
+    prec_1 = precision_score(yy_true_1, yy_pred_1, average='macro', zero_division=0)
+    prec_2 = precision_score(yy_true_2, yy_pred_2, average='macro', zero_division=0)
 
     # AUROC (macro)
     try:
-        auroc_val = roc_auc_score(yy_true_val, yy_pred_P_val, multi_class='ovo', average='macro')
-        auroc_test = roc_auc_score(yy_true_test, yy_pred_P_test, multi_class='ovo', average='macro')
+        auroc_1 = roc_auc_score(yy_true_1, yy_pred_P_1, multi_class='ovo', average='macro')
+        auroc_2 = roc_auc_score(yy_true_2, yy_pred_P_2, multi_class='ovo', average='macro')
     except ValueError:
-        auroc_val = auroc_test = np.nan  # Handle rare cases where ROC AUC can't be computed
+        auroc_1 = auroc_2 = np.nan
 
     # Calibration error (ECE)
-    ece_val = compute_ece(yy_true_val, yy_pred_P_val)
-    ece_test = compute_ece(yy_true_test, yy_pred_P_test)
+    ece_1 = compute_ece(yy_true_1, yy_pred_P_1)
+    ece_2 = compute_ece(yy_true_2, yy_pred_P_2)
 
     # Print results
-    print("\n=== Validation vs Test Metrics ===")
-    print(f"{'Metric':<20}{'Validation':>12}{'Test':>12}{'Δ (Test - Val)':>18}")
+    print(f"\n=== {name_1} vs {name_2} Metrics ===")
+    print(f"{'Metric':<20}{name_1:>12}{name_2:>12}{f'Δ ({name_2} - {name_1})':>18}")
     print("-" * 62)
-    print(f"{'Accuracy':<20}{acc_val:12.4f}{acc_test:12.4f}{acc_test - acc_val:18.4f}")
-    print(f"{'Macro F1':<20}{f1_val:12.4f}{f1_test:12.4f}{f1_test - f1_val:18.4f}")
-    print(f"{'Macro TPR':<20}{tpr_val_macro:12.4f}{tpr_test_macro:12.4f}{tpr_test_macro - tpr_val_macro:18.4f}")
-    print(f"{'Macro Precision':<20}{prec_val:12.4f}{prec_test:12.4f}{prec_test - prec_val:18.4f}")
-    print(f"{'Macro AUROC':<20}{auroc_val:12.4f}{auroc_test:12.4f}{auroc_test - auroc_val:18.4f}")
-    print(f"{'ECE':<20}{ece_val:12.4f}{ece_test:12.4f}{ece_test - ece_val:18.4f}")
+    print(f"{'Accuracy':<20}{acc_1:12.4f}{acc_2:12.4f}{acc_2 - acc_1:18.4f}")
+    print(f"{'Macro F1':<20}{f1_1:12.4f}{f1_2:12.4f}{f1_2 - f1_1:18.4f}")
+    print(f"{'Macro TPR':<20}{tpr_macro_1:12.4f}{tpr_macro_2:12.4f}{tpr_macro_2 - tpr_macro_1:18.4f}")
+    print(f"{'Macro Precision':<20}{prec_1:12.4f}{prec_2:12.4f}{prec_2 - prec_1:18.4f}")
+    print(f"{'Macro AUROC':<20}{auroc_1:12.4f}{auroc_2:12.4f}{auroc_2 - auroc_1:18.4f}")
+    print(f"{'ECE':<20}{ece_1:12.4f}{ece_2:12.4f}{ece_2 - ece_1:18.4f}")
 
     # Bar plot of per-class TPR difference
     if show_plot:
         if class_names is None:
-            class_names = [f"Class {i}" for i in range(len(tpr_val))]
+            class_names = [f"Class {i}" for i in range(len(tpr_1))]
 
         plt.figure(figsize=(10, 5))
-        plt.bar(class_names, tpr_test - tpr_val)
+        plt.bar(class_names, tpr_2 - tpr_1)
         plt.axhline(0, color='gray', linestyle='--', linewidth=1)
-        plt.ylabel("Δ TPR (Test - Val)")
-        plt.title("Per-Class TPR Generalization Gap")
+        plt.ylabel(f"Δ TPR ({name_2} - {name_1})")
+        plt.title(f"Per-Class TPR Generalization Gap: {name_2} - {name_1}")
         plt.xticks(rotation=15, ha='right')
         plt.tight_layout()
         plt.show()
+

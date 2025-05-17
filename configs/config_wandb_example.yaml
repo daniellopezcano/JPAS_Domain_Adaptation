@@ -1,0 +1,56 @@
+# ════════════════════════════════════════════════════════════════
+# Weights & Biases Sweep Configuration
+# ════════════════════════════════════════════════════════════════
+
+method: random                     # Sweep search strategy
+name: "JPAS_DA_wandb_example"      # Name of the sweep
+
+# ════════════════════════════════════════════════════════════════
+# Parameters to sweep over
+# ════════════════════════════════════════════════════════════════
+parameters:
+
+  # ── Architecture Outputs ──
+  output_dim:
+    distribution: int_uniform
+    min: 2
+    max: 32
+
+  # ── Training Config ──
+  NN_epochs:
+    distribution: int_uniform
+    min: 100
+    max: 500
+
+  NN_batches_per_epoch:
+    distribution: int_uniform
+    min: 512
+    max: 8192
+
+  batch_size:
+    distribution: int_uniform
+    min: 64
+    max: 8192
+
+  lr:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.1
+
+  weight_decay:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.01
+
+  clip_grad_norm:
+    distribution: uniform
+    min: 0.1
+    max: 100.0
+
+  # ── Architecture Selector Indices ──
+  encoder_id:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+  downstream_id:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+

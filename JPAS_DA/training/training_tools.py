@@ -26,7 +26,8 @@ def train_model(
     path_save: Optional[str] = None,
     config_encoder: Optional[Dict] = None,
     config_downstream: Optional[Dict] = None,
-    device: Optional[str] = None
+    device: Optional[str] = None,
+    default_overwrite: Optional[bool] = False
 ) -> float:
     """
     Train a classifier using the provided encoder and downstream model.
@@ -65,25 +66,32 @@ def train_model(
         if os.path.exists(path_save):
             logging.info(f"Directory '{path_save}' already exists.")
             while True:
-                choice = input("Do you want to [O]verwrite, [N]ew path, or [C]ancel? ").strip().lower()
-                if choice == 'o':
+                if default_overwrite:
                     logging.info(f"Overwriting '{path_save}'...")
                     shutil.rmtree(path_save)
                     os.makedirs(path_save)
                     logging.info(f"Directory '{path_save}' has been overwritten.")
                     break
-                elif choice == 'n':
-                    path_save = input("Enter new directory path: ").strip()
-                    if not os.path.exists(path_save):
-                        os.makedirs(path_save)
-                        logging.info(f"Created new directory: '{path_save}'")
-                        break
-                    else:
-                        logging.info("That path already exists. Please choose another.")
-                elif choice == 'c':
-                    raise RuntimeError("Operation cancelled by user.")
                 else:
-                    logging.info("Invalid choice. Please enter 'O', 'N', or 'C'.")
+                    choice = input("Do you want to [O]verwrite, [N]ew path, or [C]ancel? ").strip().lower()
+                    if choice == 'o':
+                        logging.info(f"Overwriting '{path_save}'...")
+                        shutil.rmtree(path_save)
+                        os.makedirs(path_save)
+                        logging.info(f"Directory '{path_save}' has been overwritten.")
+                        break
+                    elif choice == 'n':
+                        path_save = input("Enter new directory path: ").strip()
+                        if not os.path.exists(path_save):
+                            os.makedirs(path_save)
+                            logging.info(f"Created new directory: '{path_save}'")
+                            break
+                        else:
+                            logging.info("That path already exists. Please choose another.")
+                    elif choice == 'c':
+                        raise RuntimeError("Operation cancelled by user.")
+                    else:
+                        logging.info("Invalid choice. Please enter 'O', 'N', or 'C'.")
         else:
             os.makedirs(path_save)
             logging.info(f"Created directory: '{path_save}'")

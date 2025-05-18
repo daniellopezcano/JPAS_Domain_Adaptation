@@ -66,7 +66,7 @@ data:
 # Model Architecture
 # ════════════════════════════════════════════════════════════════════
 models:
-  path_load: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models/09_wrapped_training_no_DA
+  path_load: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models/11_wandb_no_DA/solar-sweep-87
 
   # encoder:
   #   hidden_layers: [64, 64, 32, 16]
@@ -81,19 +81,19 @@ models:
 # Training Configuration
 # ════════════════════════════════════════════════════════════════════
 training:
-  path_save: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models
+  path_save: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models/11_wandb_no_DA
 
   sampling_strategy: true_random
   freeze_downstream_model: false
   
-  NN_epochs: 400
-  NN_batches_per_epoch: 8192
-  batch_size: 2048
+  NN_epochs: 600
+  NN_batches_per_epoch: 4796
+  batch_size: 7306
   batch_size_val: null
 
   lr: 0.0009
-  weight_decay: 0.0001
-  clip_grad_norm: 100.0
+  weight_decay: 0.0015887422866806597
+  clip_grad_norm: 82.3958629793097
 
   seed_mode: deterministic
   seed: 0

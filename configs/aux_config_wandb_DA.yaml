@@ -34,14 +34,14 @@ data:
   i_band_sn_threshold: 0.0
   z_lim_QSO_cut: 2.2
 
-  train_ratio_both: 0.7
-  val_ratio_both: 0.15
-  test_ratio_both: 0.15
+  train_ratio_both: 0.8
+  val_ratio_both: 0.1
+  test_ratio_both: 0.1
   random_seed_split_both: 0
 
-  train_ratio_only_DESI: 0.7
-  val_ratio_only_DESI: 0.15
-  test_ratio_only_DESI: 0.15
+  train_ratio_only_DESI: 0.8
+  val_ratio_only_DESI: 0.1
+  test_ratio_only_DESI: 0.1
   random_seed_split_only_DESI: 0
 
   keys_xx: [OBS, ERR, MORPHTYPE_int]
@@ -50,7 +50,7 @@ data:
   key_survey_training: JPAS_matched
 
 models:
-  path_load: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models/11_wandb_no_DA/crimson-sweep-9
+  path_load: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models/11_wandb_no_DA/ultra_solar-sweep-87
 
 training:
   path_save: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models/11_wandb_DA

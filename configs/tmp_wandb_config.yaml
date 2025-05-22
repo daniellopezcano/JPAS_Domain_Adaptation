@@ -1,0 +1,41 @@
+global:
+  N_threads: 8
+data:
+  data_paths: default_global_setup
+  dict_clean_data_options: default_global_setup
+  dict_split_data_options:
+    train_ratio_both: 0.8
+    val_ratio_both: 0.1
+    test_ratio_both: 0.1
+    random_seed_split_both: 0
+    train_ratio_only_DESI: 0.8
+    val_ratio_only_DESI: 0.1
+    test_ratio_only_DESI: 0.1
+    random_seed_split_only_DESI: 0
+  features_labels_options:
+    keys_xx:
+    - OBS
+    - ERR
+    - MORPHTYPE_int
+    keys_yy:
+    - SPECTYPE_int
+    - TARGETID
+    normalize: true
+    key_survey_training: JPAS_matched
+models:
+  path_load: wandb_no_DA/fiery-sweep-6
+training:
+  path_save: default_global_setup
+  default_overwrite: false
+  sampling_strategy: true_random
+  freeze_downstream_model: true
+  NN_epochs: 400
+  NN_batches_per_epoch: 6896
+  batch_size: 5372
+  batch_size_val: null
+  lr: 0.0386087126237684
+  weight_decay: 0.0001827494443833391
+  clip_grad_norm: 10.915736691608387
+  seed_mode: deterministic
+  seed: 0
+  device: cuda

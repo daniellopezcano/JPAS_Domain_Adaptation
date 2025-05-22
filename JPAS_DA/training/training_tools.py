@@ -12,17 +12,17 @@ def train_model(
     model_encoder: torch.nn.Module,
     model_downstream: torch.nn.Module,
     loss_function_dict: Dict,
-    freeze_downstream_model: bool = False,
-    dset_val=None,
-    NN_epochs: int = 100,
-    NN_batches_per_epoch: int = 10,
-    batch_size: int = 64,
+    freeze_downstream_model: bool,
+    dset_val: Optional[float] = None,
+    NN_epochs: Optional[int] = 100,
+    NN_batches_per_epoch: Optional[int] = 10,
+    batch_size: Optional[int] = 64,
     batch_size_val: Optional[int] = None,
-    lr: float = 1e-3,
-    weight_decay: float = 0.0,
+    lr: Optional[float] = 1e-3,
+    weight_decay: Optional[float] = 0.0,
     clip_grad_norm: Optional[float] = None,
-    seed_mode: str = "random",  # 'random', 'deterministic', or 'overfit'
-    seed: int = 0,
+    seed_mode: Optional[str] = "random",  # 'random', 'deterministic', or 'overfit'
+    seed: Optional[int] = 0,
     path_save: Optional[str] = None,
     config_encoder: Optional[Dict] = None,
     config_downstream: Optional[Dict] = None,
@@ -106,7 +106,7 @@ def train_model(
 
     # Use same batch size for validation if not provided
     if batch_size_val is None:
-        batch_size_val = batch_size
+        batch_size_val = len(dset_val.yy[list(dset_val.yy.keys())[0]])
 
     # Use training set for validation if in overfit mode
     if seed_mode == "overfit":

@@ -8,7 +8,7 @@ global:
 # Data Configuration
 # ════════════════════════════════════════════════════════════════════
 data:
-  root_path: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/DATA/noise_jpas_v1/Train-Validate-Test
+  root_path: /home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/JPAS_Domain_Adaptation/DATA/noise_jpas_v1/Train-Validate-Test
 
   # ── JPAS dataset ──
   load_JPAS_data:
@@ -60,40 +60,40 @@ data:
   keys_xx: [OBS, ERR, MORPHTYPE_int]
   keys_yy: [SPECTYPE_int, TARGETID]
   normalize: true
-  key_survey_training: DESI_combined
+  key_survey_training: DESI_combined # JPAS_matched, DESI_matched
 
 # ════════════════════════════════════════════════════════════════════
 # Model Architecture
 # ════════════════════════════════════════════════════════════════════
 models:
-  path_load: null
+  path_load: /home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/JPAS_Domain_Adaptation/SAVED_models/11_wandb_no_DA/solar-sweep-87
 
-  encoder:
-    hidden_layers: [64, 64, 32, 16]
-    dropout_rates: [0.02, 0.02, 0.02, 0.02]
-    output_dim: 8
+  # encoder:
+  #   hidden_layers: [64, 64, 32, 16]
+  #   dropout_rates: [0.02, 0.02, 0.02, 0.02]
+  #   output_dim: 8
 
-  downstream:
-    hidden_layers: [32, 32]
-    dropout_rates: [0.02, 0.02]
+  # downstream:
+  #   hidden_layers: [32, 32]
+  #   dropout_rates: [0.02, 0.02]
 
 # ════════════════════════════════════════════════════════════════════
 # Training Configuration
 # ════════════════════════════════════════════════════════════════════
 training:
-  path_save: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/SAVED_models
+  path_save: /home/dlopez/Documentos/0.profesional/Postdoc/USP/Projects/JPAS_Domain_Adaptation/SAVED_models/11_wandb_no_DA
 
   sampling_strategy: true_random
   freeze_downstream_model: false
   
-  NN_epochs: 400
-  NN_batches_per_epoch: 8192
-  batch_size: 2048
+  NN_epochs: 600
+  NN_batches_per_epoch: 4796
+  batch_size: 7306
   batch_size_val: null
 
-  lr: 0.01
-  weight_decay: 0.0001
-  clip_grad_norm: 100.0
+  lr: 0.0009
+  weight_decay: 0.0015887422866806597
+  clip_grad_norm: 82.3958629793097
 
   seed_mode: deterministic
   seed: 0

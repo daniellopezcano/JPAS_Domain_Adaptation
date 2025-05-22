@@ -1,3 +1,4 @@
+from JPAS_DA import global_setup
 from JPAS_DA.data import wrapper_data_loaders
 from JPAS_DA.models import model_building_tools
 from JPAS_DA.training import training_tools
@@ -10,150 +11,7 @@ from typing import Optional, Tuple, List
 import yaml
 from pathlib import Path
 import logging
-
-def wrapper_train_models(
-    dict_data: dict,
-    path_load: Optional[str],
-    hidden_layers_encoder: List[int],
-    dropout_rates_encoder: List[float],
-    output_dim_encoder: int,
-    hidden_layers_downstream: List[int],
-    dropout_rates_downstream: List[float],
-    sampling_strategy: str,
-    freeze_downstream_model: bool,
-    NN_epochs: int,
-    NN_batches_per_epoch: int,
-    batch_size: int,
-    lr: float,
-    weight_decay: float,
-    clip_grad_norm: Optional[float],
-    seed_mode: str,
-    seed: int,
-    path_save: str,
-    batch_size_val: Optional[int] = None,
-    device: Optional[str] = "cuda",
-    default_overwrite: Optional[bool] = False
-):
-    """
-    Full training wrapper for encoder and downstream models.
-
-    Handles normalization, model construction, loss setup, and training loop execution.
-
-    Returns:
-        dset_train, dset_val, model_encoder, model_downstream, min_val_loss
-    """
-
-    # ────────────────────────────────────────────────
-    # 1. Load normalization if checkpoint provided
-    # ────────────────────────────────────────────────
-    if path_load is None:
-        dict_data["provided_normalization"] = None
-    else:
-        means, stds = save_load_tools.load_means_stds(path_load)
-        dict_data["provided_normalization"] = (means, stds)
-
-    key_survey_training = dict_data.pop("key_survey_training")
-    dset_loaders = wrapper_data_loaders.wrapper_data_loaders(**dict_data)
-    dset_train = dset_loaders[key_survey_training]["train"]
-    dset_val = dset_loaders[key_survey_training]["val"]
-    
-    # Return to default, makes my life far easier when reading back stored config files :D
-    dict_data["provided_normalization"] = None
-
-    # ────────────────────────────────────────────────
-    # 2. Infer dimensions and initialize models
-    # ────────────────────────────────────────────────
-    n_classes = len(dset_train.class_labels)
-
-    path_load_encoder = os.path.join(path_load, "model_encoder.pt") if path_load else None
-    path_load_downstream = os.path.join(path_load, "model_downstream.pt") if path_load else None
-
-    aux_tools.set_seed(seed)
-
-    if path_load_encoder:
-        assert os.path.isfile(path_load_encoder), f"File does not exist: {path_load_encoder}"
-        config_encoder, model_encoder = save_load_tools.load_model_from_checkpoint(
-            path_load_encoder, model_building_tools.create_mlp
-        )
-    else:
-        xx, _ = dset_train(batch_size=1)
-        config_encoder = {
-            'input_dim': xx.shape[-1],
-            'hidden_layers': hidden_layers_encoder,
-            'dropout_rates': dropout_rates_encoder,
-            'output_dim': output_dim_encoder,
-            'use_batchnorm': False,
-            'use_layernorm_at_output': False,
-            'init_method': 'xavier'
-        }
-        model_encoder = model_building_tools.create_mlp(**config_encoder)
-
-    if path_load_downstream:
-        assert os.path.isfile(path_load_downstream), f"File does not exist: {path_load_downstream}"
-        config_downstream, model_downstream = save_load_tools.load_model_from_checkpoint(
-            path_load_downstream, model_building_tools.create_mlp
-        )
-    else:
-        config_downstream = {
-            'input_dim': output_dim_encoder,
-            'hidden_layers': hidden_layers_downstream,
-            'dropout_rates': dropout_rates_downstream,
-            'output_dim': n_classes,
-            'use_batchnorm': False,
-            'use_layernorm_at_output': False,
-            'init_method': 'xavier'
-        }
-        model_downstream = model_building_tools.create_mlp(**config_downstream)
-
-    # ────────────────────────────────────────────────
-    # 3. Build loss dictionary with class weights
-    # ────────────────────────────────────────────────
-    if sampling_strategy == "true_random":
-        counts = dset_train.class_counts
-        total_samples = np.sum(counts)
-        weights = total_samples / (n_classes * counts)
-        class_weights = torch.tensor(weights, dtype=torch.float32)
-    elif sampling_strategy == "class_random":
-        class_weights = torch.tensor(np.ones(n_classes), dtype=torch.float32)
-    else:
-        raise ValueError(f"Unsupported sampling strategy: {sampling_strategy}")
-
-    loss_function_dict = {
-        "type": "CrossEntropyLoss",
-        "sampling_strategy": sampling_strategy,
-        "class_weights": class_weights
-    }
-
-    # ────────────────────────────────────────────────
-    # 4. Run training
-    # ────────────────────────────────────────────────
-    if batch_size_val is None:
-        batch_size_val = len(dset_val.yy[list(dset_val.yy.keys())[0]])
-
-    min_val_loss = training_tools.train_model(
-        dset_train=dset_train,
-        model_encoder=model_encoder,
-        model_downstream=model_downstream,
-        loss_function_dict=loss_function_dict,
-        freeze_downstream_model=freeze_downstream_model,
-        dset_val=dset_val,
-        NN_epochs=NN_epochs,
-        NN_batches_per_epoch=NN_batches_per_epoch,
-        batch_size=batch_size,
-        batch_size_val=batch_size_val,
-        lr=lr,
-        weight_decay=weight_decay,
-        clip_grad_norm=clip_grad_norm,
-        seed_mode=seed_mode,
-        seed=seed,
-        path_save=path_save,
-        config_encoder=config_encoder,
-        config_downstream=config_downstream,
-        device=device,
-        default_overwrite=default_overwrite
-    )
-
-    return dset_train, dset_val, model_encoder, model_downstream, min_val_loss
+import copy
 
 
 def load_config_file(config_path: str) -> dict:
@@ -188,76 +46,229 @@ def load_config_file(config_path: str) -> dict:
         logging.error(f"❌ ERROR: Unexpected issue reading {config_path}: {e}")
         return None
 
-def wrapper_train_models_from_config(config_path, run_name, default_overwrite=True):
+def load_and_massage_config_file(config_path, run_name):
     """
-    Wrapper to train models from config file
     """
-    
-    config = load_config_file(config_path)
 
-    # === Global === #
-    dict_global = config["global"]
-    N_threads = dict_global["N_threads"]
-    N_threads = aux_tools.set_N_threads_(N_threads=N_threads)
+    config = load_config_file(config_path)
+    config_0 = copy.deepcopy(config)
 
     # === Data === #
-    dict_data = config["data"]
-
-    # === Models === #
-    dict_models = config["models"]
-
-    path_load = dict_models["path_load"]
+    path_load = config["models"]["path_load"]
 
     if path_load is None:
-        dict_encoder = dict_models["encoder"]
-        hidden_layers_encoder = dict_encoder["hidden_layers"]
-        dropout_rates_encoder = dict_encoder["dropout_rates"]
-        output_dim_encoder = dict_encoder["output_dim"]
-
-        dict_downstream = dict_models["downstream"]
-        hidden_layers_downstream = dict_downstream["hidden_layers"]
-        dropout_rates_downstream = dict_downstream["dropout_rates"]
-
+        config["data"]["provided_normalization"] = None
     else:
-        dict_encoder = {}
-        hidden_layers_encoder = []
-        dropout_rates_encoder = []
-        output_dim_encoder = 0
+        path_load = os.path.join(global_setup.path_models, path_load)
+        means, stds = save_load_tools.load_means_stds(path_load)
+        config["data"]["provided_normalization"] = (means, stds)
 
-        dict_downstream = {}
-        hidden_layers_downstream = []
-        dropout_rates_downstream = []
+    if config["data"]["data_paths"] == "default_global_setup":
+        config["data"]["data_paths"] = {
+            "root_path": global_setup.DATA_path,
+            "load_JPAS_data": global_setup.load_JPAS_data,
+            "load_DESI_data": global_setup.load_DESI_data,
+            "random_seed_load": global_setup.default_seed
+        }
 
+    if config["data"]["dict_clean_data_options"] == "default_global_setup":
+        config["data"]["dict_clean_data_options"] = global_setup.dict_clean_data_options
+    
     # === Training === #
-    dict_training = config["training"]
+    if config["training"]["path_save"] == "default_global_setup":
+        config["training"]["path_save"] = os.path.join(global_setup.path_models, run_name)
 
-    path_save = dict_training["path_save"]
-    path_save = os.path.join(path_save, run_name)
-    config["training"]["path_save"] = path_save
+    return config_0, config
 
-    sampling_strategy = dict_training["sampling_strategy"]
-    freeze_downstream_model = dict_training["freeze_downstream_model"]
-    NN_epochs = dict_training["NN_epochs"]
-    NN_batches_per_epoch = dict_training["NN_batches_per_epoch"]
-    batch_size = dict_training["batch_size"]
-    batch_size_val = dict_training["batch_size_val"]
-    lr = dict_training["lr"]
-    weight_decay = dict_training["weight_decay"]
-    clip_grad_norm = dict_training["clip_grad_norm"]
-    seed_mode = dict_training["seed_mode"]
-    seed = dict_training["seed"]
-    device = dict_training["device"]
+def wrapper_data_loaders_from_config(dict_data):
+    """
+    Wrapper function to initialize training and validation DataLoaders from a structured config dictionary.
 
-    dset_train, dset_val, model_encoder, model_downstream, min_val_loss = wrapper_train_models(
-        dict_data, path_load, hidden_layers_encoder, dropout_rates_encoder, output_dim_encoder,
-        hidden_layers_downstream, dropout_rates_downstream, sampling_strategy, freeze_downstream_model,
-        NN_epochs, NN_batches_per_epoch, batch_size, lr, weight_decay, clip_grad_norm, seed_mode, seed, path_save,
-        batch_size_val=batch_size_val, device=device, default_overwrite=default_overwrite
+    Parameters
+    ----------
+    dict_data : dict
+        Dictionary containing all required parameters for loading, cleaning, splitting, and formatting data.
+
+    Returns
+    -------
+    dset_train : DataLoader
+        Training DataLoader from the selected survey.
+    dset_val : DataLoader
+        Validation DataLoader from the selected survey.
+    """
+    logging.info("📦 Parsing configuration to prepare DataLoaders...")
+
+    # Extract configuration sub-dictionaries
+    data_paths             = dict_data['data_paths']
+    clean_opts             = dict_data['dict_clean_data_options']
+    split_opts             = dict_data['dict_split_data_options']
+    feature_opts           = dict_data['features_labels_options']
+    provided_normalization = dict_data.get('provided_normalization', None)
+
+    logging.info("🔧 Launching wrapper_data_loaders with loaded configuration...")
+    dset_loaders = wrapper_data_loaders.wrapper_data_loaders(
+        root_path                   = data_paths['root_path'],
+        load_JPAS_data              = data_paths['load_JPAS_data'],
+        load_DESI_data              = data_paths['load_DESI_data'],
+        random_seed_load            = data_paths['random_seed_load'],
+
+        apply_masks                 = clean_opts['apply_masks'],
+        mask_indices                = clean_opts['mask_indices'],
+        magic_numbers               = clean_opts['magic_numbers'],
+        i_band_sn_threshold         = clean_opts['i_band_sn_threshold'],
+        z_lim_QSO_cut               = clean_opts['z_lim_QSO_cut'],
+
+        train_ratio_both            = split_opts['train_ratio_both'],
+        val_ratio_both              = split_opts['val_ratio_both'],
+        test_ratio_both             = split_opts['test_ratio_both'],
+        random_seed_split_both      = split_opts['random_seed_split_both'],
+
+        train_ratio_only_DESI       = split_opts['train_ratio_only_DESI'],
+        val_ratio_only_DESI         = split_opts['val_ratio_only_DESI'],
+        test_ratio_only_DESI        = split_opts['test_ratio_only_DESI'],
+        random_seed_split_only_DESI = split_opts['random_seed_split_only_DESI'],
+
+        keys_xx                     = feature_opts['keys_xx'],
+        keys_yy                     = feature_opts['keys_yy'],
+        normalize                   = feature_opts['normalize'],
+
+        provided_normalization      = provided_normalization
     )
 
-    os.makedirs(path_save, exist_ok=True)
-    config_path = os.path.join(path_save, "config.yaml")
-    with open(config_path, "w") as f:
-        yaml.dump(config, f, sort_keys=False)
+    key_survey_training = feature_opts["key_survey_training"]
+    logging.info(f"✅ Returning DataLoaders from training survey key: {key_survey_training}")
+    return dset_loaders[key_survey_training]["train"], dset_loaders[key_survey_training]["val"]
 
-    return config, dset_train, dset_val, model_encoder, model_downstream, min_val_loss
+def wrapper_define_or_load_models_from_config(input_dim, n_classes, config_models):
+    """
+    Loads or builds encoder and downstream models based on configuration settings.
+
+    Parameters
+    ----------
+    input_dim : int
+        Input dimensionality for the encoder.
+    n_classes : int
+        Number of output classes for the downstream model.
+    config_models : dict
+        Configuration dictionary specifying the architecture or checkpoint paths.
+
+    Returns
+    -------
+    model_encoder : nn.Module
+        Encoder model instance.
+    model_downstream : nn.Module
+        Downstream classifier model instance.
+    """
+    path_load_models = config_models["path_load"]
+    aux_tools.set_seed(0)
+
+    # ───── Load or build encoder ─────
+    if path_load_models:
+        path_load_encoder = os.path.join(global_setup.path_models, path_load_models, "model_encoder.pt")
+        assert os.path.isfile(path_load_encoder), f"❌ Encoder checkpoint not found: {path_load_encoder}"
+        logging.info(f"📥 Loading encoder from checkpoint: {path_load_encoder}")
+        config_encoder, model_encoder = save_load_tools.load_model_from_checkpoint(path_load_encoder, model_building_tools.create_mlp)
+    else:
+        logging.info("🛠️ Building encoder model from configuration...")
+        config_encoder = {
+            'input_dim': input_dim,
+            'hidden_layers': config_models["encoder"]["hidden_layers"],
+            'dropout_rates': config_models["encoder"]["dropout_rates"],
+            'output_dim': config_models["encoder"]["output_dim"],
+            'use_batchnorm': False,
+            'use_layernorm_at_output': False,
+            'init_method': 'xavier'
+        }
+        model_encoder = model_building_tools.create_mlp(**config_encoder)
+
+    # ───── Load or build downstream model ─────
+    if path_load_models:
+        path_load_downstream = os.path.join(global_setup.path_models, path_load_models, "model_downstream.pt")
+        assert os.path.isfile(path_load_downstream), f"❌ Downstream checkpoint not found: {path_load_downstream}"
+        logging.info(f"📥 Loading downstream model from checkpoint: {path_load_downstream}")
+        config_downstream, model_downstream = save_load_tools.load_model_from_checkpoint(path_load_downstream, model_building_tools.create_mlp)
+    else:
+        logging.info("🛠️ Building downstream model from configuration...")
+        config_downstream = {
+            'input_dim': config_models["encoder"]["output_dim"],
+            'hidden_layers': config_models["downstream"]["hidden_layers"],
+            'dropout_rates': config_models["downstream"]["dropout_rates"],
+            'output_dim': n_classes,
+            'use_batchnorm': False,
+            'use_layernorm_at_output': False,
+            'init_method': 'xavier'
+        }
+        model_downstream = model_building_tools.create_mlp(**config_downstream)
+
+    logging.info("✅ Models ready for training or evaluation.")
+    return config_encoder, model_encoder, config_downstream, model_downstream
+
+def wrapper_train_routine_from_config(dset_train, dset_val, model_encoder, config_encoder, model_downstream, config_downstream, config_training):
+
+    n_classes = len(dset_train.class_labels)
+    
+    loss_function_dict = {
+        "type": "CrossEntropyLoss",
+        "sampling_strategy": config_training["sampling_strategy"]
+    }
+    if config_training["sampling_strategy"] == "true_random":
+        counts = dset_train.class_counts
+        total_samples = np.sum(counts)
+        weights = total_samples / (n_classes * counts)
+        loss_function_dict["class_weights"] = torch.tensor(weights, dtype=torch.float32)
+    elif config_training["sampling_strategy"] == "class_random":
+        loss_function_dict["class_weights"] = torch.tensor(np.ones(n_classes), dtype=torch.float32)
+    else:
+        raise ValueError(f"Unsupported sampling strategy")
+
+    min_val_loss = training_tools.train_model(
+        dset_train=dset_train,
+        model_encoder=model_encoder,
+        model_downstream=model_downstream,
+        loss_function_dict=loss_function_dict,
+        freeze_downstream_model=config_training["freeze_downstream_model"],
+        dset_val=dset_val,
+        NN_epochs=config_training["NN_epochs"],
+        NN_batches_per_epoch=config_training["NN_batches_per_epoch"],
+        batch_size=config_training["batch_size"],
+        batch_size_val=config_training["batch_size_val"],
+        lr=config_training["lr"],
+        weight_decay=config_training["weight_decay"],
+        clip_grad_norm=config_training["clip_grad_norm"],
+        seed_mode=config_training["seed_mode"],
+        seed=config_training["seed"],
+        path_save=config_training["path_save"],
+        config_encoder=config_encoder,
+        config_downstream=config_downstream,
+        device=config_training["device"],
+        default_overwrite=config_training["default_overwrite"]
+    )
+
+    return min_val_loss
+
+def wrapper_train_from_config(config_path, run_name):
+
+    # 1. Load and process config file
+    config_0, config = load_and_massage_config_file(config_path, run_name)
+    _ = aux_tools.set_N_threads_(N_threads=config['global']['N_threads'])
+
+    # 2. Load data and define data loaders
+    dset_train, dset_val = wrapper_data_loaders_from_config(config["data"])
+
+    # 3. Define or reload models
+    xx, _ = dset_train(batch_size=1)
+    config_encoder, model_encoder, config_downstream, model_downstream = wrapper_define_or_load_models_from_config(
+        input_dim=xx.shape[-1], n_classes=len(dset_train.class_labels), config_models=config["models"]
+    )
+
+    # 4. Taining
+    min_val_loss = wrapper_train_routine_from_config(
+        dset_train, dset_val, model_encoder, config_encoder, model_downstream, config_downstream, config["training"]
+    )
+
+    # 5. Save config file
+    with open(os.path.join(config["training"]["path_save"], "config.yaml"), "w") as f:
+        yaml.dump(config_0, f, sort_keys=False)
+
+    return config_0, config, dset_train, dset_val, config_encoder, model_encoder, config_downstream, model_downstream, min_val_loss
+

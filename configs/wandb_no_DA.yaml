@@ -3,7 +3,7 @@
 # ════════════════════════════════════════════════════════════════
 
 method: random                     # Sweep search strategy
-name: "JPAS_DA"      # Name of the sweep
+name: "JPAS_no_DA"                 # Name of the sweep
 
 # ════════════════════════════════════════════════════════════════
 # Parameters to sweep over
@@ -11,7 +11,13 @@ name: "JPAS_DA"      # Name of the sweep
 parameters:
 
   aux_config_path:
-    value: /home/dlopez/Documents/Projects/JPAS_Domain_Adaptation/configs/aux_config_wandb_DA.yaml
+    value: aux_wandb_no_DA.yaml
+
+  # ── Architecture Outputs ──
+  output_dim:
+    distribution: int_uniform
+    min: 2
+    max: 16
 
   # ── Training Config ──
   NN_batches_per_epoch:
@@ -38,3 +44,11 @@ parameters:
     distribution: uniform
     min: 0.1
     max: 100.0
+
+  # ── Architecture Selector Indices ──
+  encoder_id:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+  downstream_id:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+

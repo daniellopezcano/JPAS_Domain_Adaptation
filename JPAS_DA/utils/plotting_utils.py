@@ -6,10 +6,10 @@ import logging
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
 import scipy.stats as sp
 import scipy.interpolate as interp
-
 
 def matplotlib_default_config():
 
@@ -269,6 +269,317 @@ def plot_2d_classification_with_kde(X_all, y_all, title="2D Data with Class-Cond
     fig.suptitle(title, fontsize=20)
     
     return fig, ax_main
+
+def plot_dual_targetid_logscale(labels_counts_A, labels_counts_B, top_n=15):
+    labels_A, counts_A = labels_counts_A
+    labels_B, counts_B = labels_counts_B
+
+    # Sort by count descending
+    idx_sorted_A = np.argsort(counts_A)[::-1][:top_n]
+    idx_sorted_B = np.argsort(counts_B)[::-1][:top_n]
+
+    top_labels_A = labels_A[idx_sorted_A].astype(str)
+    top_counts_A = counts_A[idx_sorted_A]
+
+    top_labels_B = labels_B[idx_sorted_B].astype(str)
+    top_counts_B = counts_B[idx_sorted_B]
+
+    x = np.arange(top_n)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    ax.plot(x, top_counts_A, marker='o', lw=2, label="JPAS")
+    ax.plot(x, top_counts_B, marker='s', lw=2, label="JPAS_Ignasi")
+
+    ax.set_yscale("log")
+    ax.set_ylabel("Count (log scale)", fontsize=12)
+
+    # Bottom x-axis with JPAS labels
+    ax.set_xticks(x)
+    ax.set_xticklabels(top_labels_A, rotation=45, ha='right', fontsize=10)
+    ax.set_xlabel("TARGETIDs from JPAS", fontsize=12)
+
+    # Top x-axis with JPAS_Ignasi labels
+    ax_top = ax.secondary_xaxis('top')
+    ax_top.set_xticks(x)
+    ax_top.set_xticklabels(top_labels_B, rotation=45, ha='left', fontsize=10)
+    ax_top.set_xlabel("TARGETIDs from JPAS_Ignasi", fontsize=12)
+
+    ax.grid(True, linestyle='--', alpha=0.6)
+    ax.legend()
+    ax.set_title(f"Top {top_n} Most Frequent TARGETIDs", fontsize=14)
+    plt.tight_layout()
+    plt.show()
+
+def plot_pie_chart(labels, counts, title="Pie Chart", class_names=None, custom_colors=None, explode=None):
+    """
+    Plots a generic pie chart with additional features like displaying count and percentage, custom colors, and explode.
+
+    Parameters:
+    - labels (list of str): Labels for each slice of the pie.
+    - counts (list or np.ndarray): Counts or values for each slice.
+    - title (str): Title of the plot. Default is 'Pie Chart'.
+    - class_names (list of str): Names of the classes for labeling. Default is None, in which case `labels` will be used.
+    - custom_colors (list or np.ndarray): Colors for the slices. Default is None, and the function will use a colormap.
+    - explode (list): List of "explode" values for each slice. Default is None.
+    """
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+    # Function to display count and percentage in two lines
+    def make_autopct(counts):
+        def my_autopct(pct):
+            total = sum(counts)
+            absolute = int(round(pct * total / 100.0))
+            return f"{absolute}\n({pct:.1f}%)"
+        return my_autopct
+
+    # If class names are not provided, use the labels themselves
+    if class_names is None:
+        class_names = labels
+
+    # Use a colormap if custom_colors is not provided
+    if custom_colors is None:
+        colors = plt.cm.inferno(np.linspace(0., 0.8, len(counts)))
+    else:
+        colors = custom_colors
+
+    # Default explode values if not provided
+    if explode is None:
+        explode = [0.05] * len(counts)
+
+    # Create pie chart
+    wedges, texts, autotexts = ax.pie(
+        counts,
+        labels=class_names,
+        autopct=make_autopct(counts),
+        startangle=140,
+        colors=colors,
+        explode=explode,
+        wedgeprops={'edgecolor': 'black', 'linewidth': 1},
+        textprops={'fontsize': 12}
+    )
+
+    # Customize font color inside pie
+    for autotext in autotexts:
+        autotext.set_color("white")
+
+    # General title for the whole plot
+    plt.suptitle(f"Distribution of {title}", fontsize=20)
+
+    # Adjust layout and display the plot
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
+
+def plot_neighbors_and_spatial_distribution(kd_counts, R_arcmin, positions, min_density=0.01, max_density=0.5, zoom_in_regions=None):
+    """
+    Generates two plots: a histogram of the neighbors' counts for different radii and a spatial scatter plot with zoom-in views.
+
+    Parameters:
+    kd_counts (list of np.ndarray): Neighbor counts for different radii.
+    R_arcmin (np.ndarray): Array of radius values in arcminutes.
+    positions (np.ndarray): Array of positions, expected to have shape (n_points, 2) for RA and DEC.
+    min_density (float): Minimum density value for the color scale. Default is 0.01.
+    max_density (float): Maximum density value for the color scale. Default is 0.5.
+    zoom_in_regions (dict): Dictionary containing zoom-in regions with keys:
+        - 'min_x_array': Minimum x-values for zoom regions.
+        - 'max_x_array': Maximum x-values for zoom regions.
+        - 'min_y_array': Minimum y-values for zoom regions.
+        - 'max_y_array': Maximum y-values for zoom regions.
+        - 'zoom_point_sizes': Point sizes for each zoom region.
+        - 'zoom_width': Width of the zoom-in views for each region.
+        - 'zoom_height': Height of the zoom-in views for each region.
+    """
+
+    # Input validation
+    assert isinstance(positions, np.ndarray) and positions.shape[1] == 2, "positions should have shape (n_points, 2)"
+    assert len(kd_counts) == len(R_arcmin), "kd_counts and R_arcmin should have the same length"
+
+    # Validate zoom_in_regions dictionary
+    if zoom_in_regions:
+        required_keys = ['min_x_array', 'max_x_array', 'min_y_array', 'max_y_array', 'zoom_point_sizes', 'zoom_width', 'zoom_height']
+        for key in required_keys:
+            assert key in zoom_in_regions, f"{key} is missing from zoom_in_regions"
+        # Check if zoom_width and zoom_height match the number of zoom regions
+        assert len(zoom_in_regions['zoom_width']) == len(zoom_in_regions['min_x_array']), "zoom_width and zoom_height arrays must match the number of zoom regions"
+
+    # Constants for plotting
+    cmap = mpl.colormaps['tab20c']
+    line_colors = mpl.colormaps['cividis'](np.linspace(0, 1, len(R_arcmin)))
+
+    # === First plot: Histogram with color-coded background ===
+    logging.info("Generating histogram plot for neighbors' counts.")
+    
+    fig, ax = plt.subplots(figsize=(12, 7))
+    
+    # Background color stripes using tab20c colormap
+    # Create a smoother gradient by dividing the range of density into steps and mapping it to a colormap
+    n_stripes = 100  # Number of stripes
+    stripe_width = (max_density - min_density) / n_stripes  # Width of each stripe
+    colors = [cmap(i / n_stripes) for i in range(n_stripes)]  # Gradient color steps from colormap
+    for ii, color in enumerate(colors):
+        ax.axvspan(
+            min_density + ii * stripe_width,  # Start of the stripe
+            min_density + (ii + 1) * stripe_width,  # End of the stripe
+            color=color,  # Color of the stripe
+            linewidth=0  # No border around stripes
+        )
+    
+    # Plot each radius's histogram
+    for ii, tmp_R_arcmin in enumerate(R_arcmin):
+        hist_counts, edges = np.histogram(kd_counts[ii], bins=60, range=(min_density, max_density))
+        centers = (edges[:-1] + edges[1:]) / 2
+        ax.plot(centers, hist_counts, c=line_colors[ii], lw=2, label=fr"$R = {tmp_R_arcmin:.2f}$ arcmin")
+    
+    ax.set_yscale('log')
+    ax.set_xlabel(r'# of Neighbors / Circle Area (KD-Neighbors)', fontsize=14)
+    ax.set_ylabel('Normalized Frequency', fontsize=14)
+    ax.set_title('Neighbors within $R$', fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+    ax.legend(fontsize=10, loc='upper right', title="Search Radius", title_fontsize=12)
+    plt.tight_layout()
+
+    # === Second plot: Spatial scatter with shared colormap and zooms ===
+    if zoom_in_regions:
+        logging.info("Generating spatial scatter plot with zoom-in views.")
+    else:
+        logging.info("Generating spatial scatter plot without zoom-in views.")
+    
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # Main scatter plot
+    all_vals = np.array(kd_counts[-1])  # Assuming we are using the last kd_counts for the main plot
+    sc = ax.scatter(positions[:, 0], positions[:, 1],
+                    c=all_vals,
+                    s=1.0,
+                    cmap=cmap, vmin=min_density, vmax=max_density,
+                    alpha=0.9, edgecolor='none')
+
+    # Shared colorbar
+    cbar = plt.colorbar(sc, ax=ax, pad=0.01)
+    cbar.set_label("KD Neighbors Count", fontsize=13)
+    cbar.ax.tick_params(labelsize=11)
+
+    # Labels and formatting
+    ax.set_xlabel('RA [deg]', fontsize=14)
+    ax.set_ylabel('DEC [deg]', fontsize=14)
+    ax.set_title("Spatial Distribution with Zoom-in Views", fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+    ax.grid(True, linestyle=':', alpha=0.4)
+    ax.set_aspect('equal', adjustable='datalim')
+
+    # Zoom-in views if specified
+    if zoom_in_regions:
+        min_y_array = np.array(zoom_in_regions['min_y_array'])
+        max_y_array = np.array(zoom_in_regions['max_y_array'])
+        min_x_array = np.array(zoom_in_regions['min_x_array'])
+        max_x_array = np.array(zoom_in_regions['max_x_array'])
+        zoom_point_sizes = zoom_in_regions['zoom_point_sizes']
+        zoom_width = np.array(zoom_in_regions['zoom_width'])
+        zoom_height = np.array(zoom_in_regions['zoom_height'])
+
+        for i in range(len(min_x_array)):
+            axins = inset_axes(ax,
+                               width=zoom_width[i],
+                               height=zoom_height[i],
+                               bbox_to_anchor=(zoom_in_regions['zoom_positions'][i][0], zoom_in_regions['zoom_positions'][i][1]),
+                               bbox_transform=ax.transAxes,
+                               loc='lower left')
+
+            xmask = (positions[:, 0] >= min_x_array[i]) & (positions[:, 0] <= max_x_array[i])
+            ymask = (positions[:, 1] >= min_y_array[i]) & (positions[:, 1] <= max_y_array[i])
+            mask = xmask & ymask
+
+            axins.scatter(positions[:, 0][mask],
+                          positions[:, 1][mask],
+                          c=all_vals[mask],
+                          s=zoom_point_sizes[i],
+                          cmap=cmap, vmin=min_density, vmax=max_density,
+                          alpha=0.9, edgecolor='none')
+
+            axins.set_xlim(min_x_array[i], max_x_array[i])
+            axins.set_ylim(min_y_array[i], max_y_array[i])
+            axins.set_aspect('equal', adjustable='box')
+            axins.set_xticks([])
+            axins.set_yticks([])
+
+            mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="0.5", lw=1)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_histogram_with_ranges(magnitudes, ranges=None, colors=None, bins=200, x_label='DESI Magnitude (R)', title='Histogram of DESI Magnitudes (R)'):
+    """
+    Plot a histogram of magnitudes with specified background color ranges and text annotations for percentage of objects in each range.
+
+    Parameters:
+    magnitudes (np.ndarray): Array of magnitudes.
+    bins (int): Number of bins for the histogram.
+    ranges (list of tuples): List of magnitude ranges (lower, upper) for each color.
+    colors (list of str): List of colors corresponding to each magnitude range.
+
+    Returns:
+    dict: A dictionary of masks for each range.
+    """
+    # Initialize the dictionary of masks
+    masks_dict = {}
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Compute the histogram
+    hist_counts, edges = np.histogram(magnitudes, bins=bins, range=(np.nanmin(magnitudes), np.nanmax(magnitudes)))
+    centers = (edges[:-1] + edges[1:]) / 2
+    ax.plot(centers, hist_counts, color='k', linewidth=2)
+
+    # Total number of magnitudes
+    total_objects = len(magnitudes)
+
+    # Apply the background color stripes using the specified magnitude ranges
+    y_position = np.max(hist_counts) * 0.95  # Starting Y position for annotations, slightly below the max y value
+
+    for (lower, upper), color in zip(ranges, colors):
+        # Apply the background color bands using axvspan
+        ax.axvspan(lower, upper, color=color, alpha=0.5, linewidth=0)
+        
+        # Store the mask for the current range
+        masks_dict[f'{lower}_{upper}'] = (magnitudes >= lower) & (magnitudes < upper)
+
+        # Calculate the percentage of objects within this range
+        count_in_range = np.sum(masks_dict[f'{lower}_{upper}'])
+        percentage = (count_in_range / total_objects) * 100
+
+        # Add a text annotation with the percentage
+        ax.text(
+            (lower + upper) / 2,  # X position in the middle of the range
+            y_position,  # Y position (slightly below the top of the histogram)
+            f'{percentage:.2f}%',  # Text showing percentage
+            color='black',  # Text color
+            fontsize=12,
+            ha='center',  # Horizontal alignment
+            va='center',  # Vertical alignment
+            bbox=dict(facecolor='white', edgecolor=color, boxstyle='round,pad=0.5', linewidth=2)  # Box with white background and colored border
+        )
+        
+        # Decrease the y-position for the next annotation to avoid overlap
+        y_position -= np.max(hist_counts) * 0.1  # Adjust 10% downward for each annotation
+
+    # Set axis labels and title
+    ax.set_xlabel(x_label, fontsize=14)
+    ax.set_ylabel('Frequency', fontsize=14)
+    ax.set_title(title, fontsize=16)
+
+    # Adjust tick parameters
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+    # Ensure tight layout
+    plt.tight_layout()
+
+    # Show the plot
+    plt.show()
+
+    # Return the dictionary of masks
+    return masks_dict
 
 def plot_training_curves(path_save):
     # Load training data

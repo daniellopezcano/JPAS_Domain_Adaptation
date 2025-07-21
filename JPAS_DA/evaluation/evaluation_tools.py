@@ -7,6 +7,7 @@ import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.colors import Normalize
 
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
@@ -86,7 +87,8 @@ def plot_confusion_matrix(
     normalize=True,
     figsize=(10, 7),
     cmap='RdBu',
-    title=None
+    title=None,
+    threshold_color = 0.5
 ):
     """
     Plots a confusion matrix with counts, percentages, and class-wise metrics.
@@ -100,20 +102,37 @@ def plot_confusion_matrix(
     - figsize: figure size
     - cmap: colormap (string or Colormap object)
     """
-
     yy_pred = np.argmax(yy_pred_P, axis=1)
+    
+    # Get unique classes in yy_true
+    unique_classes = np.unique(yy_true)
     num_classes = len(class_names)
 
-    # Raw confusion matrix
+    logging.debug(f"Unique classes in yy_true: {unique_classes}")
+    logging.debug(f"Number of classes in class_names: {num_classes}")
+
+    # Ensure the number of classes in yy_true does not exceed class_names
+    missing_classes = np.arange(num_classes)[~np.isin(np.arange(num_classes), np.array(unique_classes))]
+    if missing_classes.size > 0:
+        logging.warning(f"Missing classes in the confusion matrix: {missing_classes}")
+
+    # If any class is missing from the true labels, create a zero matrix for those classes
     cm = np.zeros((num_classes, num_classes), dtype=int)
     for t, p in zip(yy_true, yy_pred):
-        cm[int(t), int(p)] += 1
+        if t in unique_classes:  # Only update the confusion matrix for existing classes in yy_true
+            cm[int(t), int(p)] += 1
 
+    # Normalize the confusion matrix by row sums
     row_sums = cm.sum(axis=1, keepdims=True)
     cm_percent = np.divide(cm, row_sums, where=row_sums != 0)
 
+    logging.debug(f"Raw confusion matrix (cm):\n{cm}")
+
+    # Normalize the cm_percent to span from 0 to 1 for colormap
+    norm = Normalize(vmin=0, vmax=1)
+
     fig, ax = plt.subplots(figsize=figsize)
-    im = ax.imshow(cm_percent, interpolation='nearest', cmap=cmap)
+    im = ax.imshow(cm_percent, interpolation='nearest', cmap=cmap, norm=norm)
 
     # Colorbar
     cbar = plt.colorbar(im, ax=ax)
@@ -133,31 +152,59 @@ def plot_confusion_matrix(
 
     plt.setp(ax.get_xticklabels(), rotation=15, ha="right", rotation_mode="anchor")
 
-    # Compute precision, recall, F1
-    precision = precision_score(yy_true, yy_pred, average=None, zero_division=0)
-    recall = recall_score(yy_true, yy_pred, average=None, zero_division=0)
-    f1 = f1_score(yy_true, yy_pred, average=None, zero_division=0)
-
-    # Threshold for annotation color
-    threshold = cm_percent.max() / 2.0
-
+    # Compute precision, recall, F1 manually from confusion matrix
+    precision = []
+    recall = []
+    f1 = []
+    for i in range(num_classes):
+        tp = cm[i, i]  # True positives
+        fp = cm[:, i].sum() - tp  # False positives
+        fn = cm[i, :].sum() - tp  # False negatives
+        tn = cm.sum() - (tp + fp + fn)  # True negatives
+        
+        # Precision, Recall, and F1 calculations with handling for missing classes
+        if tp + fp > 0:
+            precision_i = tp / (tp + fp)
+        else:
+            precision_i = 0.0
+        
+        if tp + fn > 0:
+            recall_i = tp / (tp + fn)
+        else:
+            recall_i = 0.0
+        
+        if precision_i + recall_i > 0:
+            f1_i = 2 * precision_i * recall_i / (precision_i + recall_i)
+        else:
+            f1_i = 0.0
+        
+        precision.append(precision_i)
+        recall.append(recall_i)
+        f1.append(f1_i)
+    logging.debug(f"Precision: {precision}")
+    logging.debug(f"Recall: {recall}")
+    logging.debug(f"F1 Score: {f1}")
+    
+    # Plot confusion matrix
     for i in range(num_classes):
         for j in range(num_classes):
             count = cm[i, j]
             percent = cm_percent[i, j] * 100 if row_sums[i] != 0 else 0
-            text_color = "white" if cm_percent[i, j] > threshold else "black"
-
+            text_color = "white" if cm_percent[i, j] > threshold_color else "black"
             if i == j:
-                ax.text(
-                    j, i,
-                    f"{count}\nTPR:{recall[i]*100:.1f}%\nPPV:{precision[i]*100:.1f}%\nF1:{f1[i]:.2f}",
-                    ha="center", va="center", color=text_color, fontsize=10, fontweight='bold'
-                )
+                # Display precision, recall, F1 on the diagonal
+                text = str(count) + "\nTPR:" + str(round(recall[i] * 100, 1)) + "%" + \
+                       "\nPPV:" + str(round(precision[i] * 100, 1)) + "%" + \
+                       "\nF1:" + str(round(f1[i], 2))
+                ax.text(j, i, text, ha="center", va="center", color=text_color, fontsize=10, fontweight='bold')
             else:
-                ax.text(j, i, f"{count}\n({percent:.1f}%)", ha="center", va="center", color=text_color, fontsize=11)
+                text = f"{count}\n{percent:.1f}%"
+                ax.text(j, i, text, ha="center", va="center", color=text_color, fontsize=11)
 
     plt.tight_layout()
     plt.show()
+
+    return cm
 
 def compare_TPR_confusion_matrices(
     yy_true_val,

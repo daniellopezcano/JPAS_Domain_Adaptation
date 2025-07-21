@@ -1,9 +1,13 @@
 import os
 import numpy as np
 import pandas as pd
+from astropy.io import fits
+from pathlib import Path
 import logging
 from typing import Dict, List, Any
 
+
+import pickle
 
 def load_JPAS_dsets(
     data: Dict[str, Any],
@@ -21,6 +25,7 @@ def load_JPAS_dsets(
         - 'name': identifier string
         - 'npy': filename of structured NumPy array
         - 'csv': filename of CSV file
+        - 'pickle': filename of pickle file (optional)
         - 'sample_percentage': optional float in (0, 1], default 1.0
     - random_seed (int, optional): Seed for reproducible sampling
 
@@ -34,10 +39,12 @@ def load_JPAS_dsets(
         name = dset["name"]
         npy_file = os.path.join(root_path, dset["npy"])
         csv_file = os.path.join(root_path, dset["csv"])
+        pickle_file = os.path.join(root_path, dset["pickle"])
         pct = float(dset.get("sample_percentage", 1.0))
 
         logging.info(f"|    ├─── 🔹 Dataset: {name} (sample {pct:.0%})")
 
+        # Load CSV
         try:
             df_full = pd.read_csv(csv_file)
             total_rows = len(df_full)
@@ -64,6 +71,7 @@ def load_JPAS_dsets(
             logging.error(f"|    |    ❌ Failed to load CSV '{dset['csv']}': {e}")
             continue
 
+        # Load NPY
         try:
             np_data = np.load(npy_file)
             field_names = np_data.dtype.names
@@ -81,8 +89,49 @@ def load_JPAS_dsets(
             logging.error(f"|    |    ❌ Failed to load NPY '{dset['npy']}': {e}")
             continue
 
+        # Load Pickle and integrate its contents into the CSV-derived dict
+        if pickle_file and os.path.exists(pickle_file):
+            try:
+                with open(pickle_file, "rb") as f:
+                    aux_dict = pickle.load(f)
+
+                for k, v in aux_dict.items():
+                    v = np.asarray(v)
+                    if v.shape[0] == len(selected_indices):
+                        data[f"{name}_pd"][k] = v[selected_indices]
+                    elif v.shape[0] == total_rows:
+                        data[f"{name}_pd"][k] = v[selected_indices]
+                    else:
+                        raise ValueError(f"Shape mismatch for key '{k}' in pickle: expected {total_rows}, got {v.shape[0]}")
+
+                logging.info(f"|    |    ✔ Pickle merged: {os.path.basename(pickle_file)} (keys: {list(aux_dict.keys())})")
+            except Exception as e:
+                logging.error(f"|    |    ❌ Failed to load or merge pickle '{pickle_file}': {e}")
+        else:
+            logging.warning(f"|    |    ⚠ No pickle file provided or file does not exist: {pickle_file}")
+
     logging.info("├─── ✅ Finished loading all JPAS datasets.")
     return data
+
+
+
+def load_JPAS_Ignasi_dsets(path):
+
+    logging.info("├─── 📥 Starting JPAS-Ignasi dataframe loading...")
+
+    with fits.open(Path(path)) as hdul:
+        # hdul.info()
+        data = hdul[1].data  # usar extensión 1
+
+    # Convertir a ndarray con endianess correcto (compatible con NumPy 2.0+)
+    data_array = np.array(data).byteswap().view(data.dtype.newbyteorder('='))
+
+    # Convertir a DataFrame
+    df = pd.DataFrame(data_array)
+
+    logging.info("├─── ✅ Finished loading JPAS-Ignasi dataframe.")
+
+    return df
 
 
 def load_DESI_dsets(
@@ -158,6 +207,64 @@ def load_DESI_dsets(
         logging.info(f"|    |    ✔ Sample loaded. Final shape: {data[f'{name}_np'].shape}")
 
     logging.info("├─── ✅ Finished loading all DESI datasets.")
+    return data
+
+
+def load_DESI_Lilianne_dsets(
+    data: Dict,
+    root_path: str,
+    datasets: List[Dict[str, object]],
+    random_seed: int = None,
+    pd_keys: List[str] = None
+) -> Dict:
+    
+    logging.info("├─── 📥 Starting DESI-Lilianne dataset loading...")
+
+    for dset in datasets:
+        name = dset["name"]
+        csv_file = os.path.join(root_path, dset["csv"])
+        pct = float(dset["sample_percentage"])
+
+        logging.info(f"|    ├─── 🔹 Dataset: {name}")
+
+        try:
+            df_full = pd.read_csv(csv_file)
+            total_rows = len(df_full)
+            logging.info(f"|    |    ✔ CSV loaded ({df_full.shape}), Size: {df_full.memory_usage(deep=True).sum()*1e-6:.2f} MB")
+        except Exception as e:
+            logging.error(f"|    |    ❌ CSV load failed for {csv_file}: {e}")
+            continue
+
+        if pct < 1.0:
+            n_sample = int(pct * total_rows)
+            selected_idxs = np.sort(rng.choice(total_rows, size=n_sample, replace=False))
+            logging.info(f"|    |    📉 Sampling {n_sample}/{total_rows} rows ({pct:.0%})")
+        else:
+            selected_idxs = np.arange(total_rows)
+
+        # Load and process sampled CSV
+        df_sampled = df_full.iloc[selected_idxs]
+        data[f"{name}_pd"] = {}
+        for col in df_sampled.columns:
+            if np.issubdtype(df_sampled[col].dtype, np.integer):
+                data[f"{name}_pd"][col] = df_sampled[col].astype(np.int64).to_numpy()
+            elif np.issubdtype(df_sampled[col].dtype, np.floating):
+                data[f"{name}_pd"][col] = df_sampled[col].astype(np.float64).to_numpy()
+            else:
+                data[f"{name}_pd"][col] = df_sampled[col].astype(str).tolist()
+
+    loaded_Lilianne_keys = list(data[datasets[0]["name"]+"_pd"].keys()) 
+    for ii_dset in range(len(datasets)):
+        dset_key = datasets[ii_dset]['name']
+        data[f"{dset_key}_np"] = []
+        for ii, key in enumerate(loaded_Lilianne_keys):
+            if key not in pd_keys:
+                tmp_pop = data[f"{dset_key}_pd"].pop(key)
+                data[f"{dset_key}_np"].append(tmp_pop)
+        data[f"{dset_key}_np"] = np.array(data[f"{dset_key}_np"]).T[..., None]
+
+    logging.info("├─── ✅ Finished loading all DESI-Lilianne datasets.")
+
     return data
 
 

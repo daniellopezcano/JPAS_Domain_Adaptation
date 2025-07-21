@@ -161,21 +161,21 @@ def extract_and_combine_DESI_data(
     return LoA_combined, xx, yy
 
 
-def extract_data_matched(
+def extract_data_using_LoA(
     LoA: List[List[int]],
     DATA: Dict[str, Any],
     keys_xx: List[str],
     keys_yy: List[str]
 ) -> Tuple[List[List[int]], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """
-    Extracts data from a matched set of indices using LoA.
+    Extracts data from a set of indices using LoA.
 
     Returns:
     - LoA: Same as input (repackaged).
     - xx: Dictionary of feature arrays.
     - yy: Dictionary of label arrays.
     """
-    logging.info("|    ├── 🔧 extract_data_matched()")
+    logging.info("|    ├── 🔧 extract_data_using_LoA()")
 
     # Step 1: Extract subset info
     logging.info("|    ├── Extracting features and labels from matched dataset...")

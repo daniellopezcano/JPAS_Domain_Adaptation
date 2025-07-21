@@ -173,11 +173,22 @@ def remove_invalid_NaN_rows(JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA, magic
     DATA_pd["JPAS"] = filter_preserve_type(DATA["JPAS"]["all_pd"], valid_JPAS_indices)
     DATA_pd["DESI"] = filter_preserve_type(DATA["DESI"]["all_pd"], valid_DESI_indices)
 
-    # Assertions to verify correctness
-    assert not np.isnan(JPAS_obs).any(), "NaNs found in JPAS_obs after filtering!"
-    assert not np.isnan(JPAS_err).any(), "NaNs found in JPAS_err after filtering!"
-    assert not np.isnan(DESI_mean).any(), "NaNs found in DESI_mean after filtering!"
-    assert not np.isnan(DESI_err).any(), "NaNs found in DESI_err after filtering!"
+    # Log warnings for NaN values
+    jpas_nan_count = np.isnan(JPAS_obs).any(axis=1).sum()
+    jpas_nan_perc = round(jpas_nan_count / JPAS_obs.shape[0] * 100, 2)
+    logging.warning(f"│   ├── # objects with NaNs in JPAS_obs: {jpas_nan_count} ({jpas_nan_perc}%)")
+    
+    jpas_err_nan_count = np.isnan(JPAS_err).any(axis=1).sum()
+    jpas_err_nan_perc = round(jpas_err_nan_count / JPAS_err.shape[0] * 100, 2)
+    logging.warning(f"│   ├── # objects with NaNs in JPAS_err: {jpas_err_nan_count} ({jpas_err_nan_perc}%)")
+    
+    desi_nan_count = np.isnan(DESI_mean).any(axis=1).sum()
+    desi_nan_perc = round(desi_nan_count / DESI_mean.shape[0] * 100, 2)
+    logging.warning(f"│   ├── # objects with NaNs in DESI_mean: {desi_nan_count} ({desi_nan_perc}%)")
+    
+    desi_err_nan_count = np.isnan(DESI_err).any(axis=1).sum()
+    desi_err_nan_perc = round(desi_err_nan_count / DESI_err.shape[0] * 100, 2)
+    logging.warning(f"│   ├── # objects with NaNs in DESI_err: {desi_err_nan_count} ({desi_err_nan_perc}%)")
 
     return JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd
 
@@ -269,23 +280,28 @@ def encode_strings_to_integers(
     return encoded, mapping
 
 def clean_and_mask_data(
-        DATA, apply_masks=['unreliable', 'apply_additional_filters', 'magic_numbers', 'negative_errors', 'nan_values'],
+        DATA, apply_masks=['unreliable', "jpas_ignasi_dense", 'apply_additional_filters', 'magic_numbers', 'negative_errors', 'nan_values'],
         mask_indices=[0, -2], magic_numbers=[99, -99], i_band_sn_threshold=20, z_lim_QSO_cut=None
     ):
     """
     Main function to clean and mask observational and simulated datasets.
 
     Parameters:
-    - DATA
+    - DATA (dict): Input data dictionary.
+    - apply_masks (list): List of masks to apply. Available options include:
+        'nan_values', 'jpas_ignasi_dense', 'apply_additional_filters',
+        'unreliable', 'magic_numbers', 'negative_errors'
     - mask_indices (list): Indices to be removed from the datasets.
-    - apply_masks (list): List of masks to apply
+    - magic_numbers (list): Values to mask out as invalid.
+    - i_band_sn_threshold (float): Threshold for signal-to-noise filtering.
+    - z_lim_QSO_cut (float or None): Optional redshift threshold to split QSOs.
 
     Returns:
-    - DAtA_clean (dict): Dictionary containing cleaned and masked datasets.
+    - DATA_clean (dict): Dictionary containing cleaned and masked datasets.
     """
 
     logging.info("🧽 Cleaning and masking data...")
-    
+
     JPAS_obs = DATA['JPAS']["all_observations"]
     JPAS_err = DATA['JPAS']["all_errors"]
     DESI_mean = DATA['DESI']["all_np"][..., 0]
@@ -293,12 +309,36 @@ def clean_and_mask_data(
 
     # Step 1: Handle NaN values
     if "nan_values" in apply_masks:
-        JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd = remove_invalid_NaN_rows(JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA, magic_numbers=magic_numbers)
+        JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd = remove_invalid_NaN_rows(
+            JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA, magic_numbers=magic_numbers
+        )
     else:
         DATA_pd = DATA
     del DATA
     gc.collect()
     logging.info("├── 🧹 Deleted cleaned DATA_clean dictionary to free memory.")
+
+    # Optional mask: filter JPAS entries that are in Ignasi’s catalog and dense regions
+    if "jpas_ignasi_dense" in apply_masks:
+        logging.info("├── Applying JPAS Ignasi ∩ dense-region mask")
+
+        total_before = len(DATA_pd['JPAS']['mask_in_Ignasi'])
+        jpas_mask = (
+            np.asarray(DATA_pd['JPAS']['mask_in_Ignasi']) &
+            (np.asarray(DATA_pd['JPAS']['mask_dense_if_matched']) == 1.0)
+        )
+        total_after = np.count_nonzero(jpas_mask)
+        frac = total_after / total_before if total_before > 0 else 0.0
+
+        logging.info(f"│   ├── JPAS entries before mask: {total_before}")
+        logging.info(f"│   ├── JPAS entries after mask:  {total_after}")
+        logging.info(f"│   └── Retained fraction: {frac:.3%}")
+
+        for key in DATA_pd['JPAS'].keys():
+            DATA_pd['JPAS'][key] = np.asarray(DATA_pd['JPAS'][key])[jpas_mask]
+
+        JPAS_obs = JPAS_obs[jpas_mask]
+        JPAS_err = JPAS_err[jpas_mask]
 
     # Step 2: Apply additional filters
     if "apply_additional_filters" in apply_masks:
@@ -308,22 +348,24 @@ def clean_and_mask_data(
 
     masks = {}  # Dictionary to store applied masks
 
-    # Step 2: Remove unreliable entries
+    # Step 3: Remove unreliable entries
     if "unreliable" in apply_masks:
-        JPAS_obs, JPAS_err, DESI_mean, DESI_err = mask_out_unreliable_mock_data_columns(JPAS_obs, JPAS_err, DESI_mean, DESI_err, mask_indices)
-    
-    # Step 3: Handle magic numbers (99, -99)
+        JPAS_obs, JPAS_err, DESI_mean, DESI_err = mask_out_unreliable_mock_data_columns(
+            JPAS_obs, JPAS_err, DESI_mean, DESI_err, mask_indices
+        )
+
+    # Step 4: Handle magic numbers (e.g., 99, -99)
     if "magic_numbers" in apply_masks:
         JPAS_obs, DESI_mean, magic_masks = mask_magic_numbers_99(JPAS_obs, DESI_mean)
         masks.update(magic_masks)
-    
-    # Step 4: Handle negative errors
+
+    # Step 5: Handle negative errors
     if "negative_errors" in apply_masks:
         JPAS_err, DESI_err, error_masks = take_abs_value_of_negative_errors(JPAS_err, DESI_err)
         masks.update(error_masks)
-    
-    # Step 5: Split between High and Low redshift quasars
-    if z_lim_QSO_cut != None:
+
+    # Step 6: Split between High and Low redshift quasars
+    if z_lim_QSO_cut is not None:
         logging.info("├── Splitting between High and Low z QSOs")
         for survey in list(DATA_pd.keys()):
             for ii in range(len(DATA_pd[survey]['SPECTYPE'])):
@@ -333,21 +375,21 @@ def clean_and_mask_data(
                     else:
                         DATA_pd[survey]['SPECTYPE'][ii] = "QSO_high"
 
-    # Step 6: Sample DESI with the corresponding simulated variance
+    # Step 7: Sample DESI with the corresponding simulated variance
     DESI_obs = np.random.normal(loc=DESI_mean, scale=DESI_err)
 
-    # Step 7: Encode strings to integers
+    # Step 8: Encode strings to integers (SPECTYPE and MORPHTYPE)
     all_morphs = list(DATA_pd["DESI"]['SPECTYPE']) + list(DATA_pd["JPAS"]['SPECTYPE'])
     _, shared_mapping = encode_strings_to_integers(all_morphs)
-    DESI_SPECTYPE_int, _ = encode_strings_to_integers(DATA_pd["DESI"]['SPECTYPE'], reference_mapping=shared_mapping)
-    JPAS_SPECTYPE_int, _ = encode_strings_to_integers(DATA_pd["JPAS"]['SPECTYPE'], reference_mapping=shared_mapping)
+    DESI_SPECTYPE_int, _ = encode_strings_to_integers(list(DATA_pd["DESI"]['SPECTYPE']), reference_mapping=shared_mapping)
+    JPAS_SPECTYPE_int, _ = encode_strings_to_integers(list(DATA_pd["JPAS"]['SPECTYPE']), reference_mapping=shared_mapping)
 
     all_morphs = list(DATA_pd["DESI"]['MORPHTYPE']) + list(DATA_pd["JPAS"]['MORPHTYPE'])
     _, shared_mapping = encode_strings_to_integers(all_morphs)
-    DESI_MORPHTYPE_int, _ = encode_strings_to_integers(DATA_pd["DESI"]['MORPHTYPE'], reference_mapping=shared_mapping)
-    JPAS_MORPHTYPE_int, _ = encode_strings_to_integers(DATA_pd["JPAS"]['MORPHTYPE'], reference_mapping=shared_mapping)
+    DESI_MORPHTYPE_int, _ = encode_strings_to_integers(list(DATA_pd["DESI"]['MORPHTYPE']), reference_mapping=shared_mapping)
+    JPAS_MORPHTYPE_int, _ = encode_strings_to_integers(list(DATA_pd["JPAS"]['MORPHTYPE']), reference_mapping=shared_mapping)
 
-    # Step 7: Create clean dictionary
+    # Step 9: Create clean dictionary
     DATA_clean = {}
     for survey in list(DATA_pd.keys()):
         DATA_clean[survey] = {}

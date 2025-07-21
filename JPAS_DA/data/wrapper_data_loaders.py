@@ -25,8 +25,10 @@ def wrapper_data_loaders(
     val_ratio_only_DESI: float,
     test_ratio_only_DESI: float,
     random_seed_split_only_DESI: int,
+    define_dataset_loaders_keys: Optional[List[str]],
     keys_xx: List[str],
     keys_yy: List[str],
+    normalization_source_key: Optional[str],
     normalize: bool,
     provided_normalization: Optional[Tuple[List[float], List[float]]] = None
 ) -> Dict[str, Dict[str, Any]]:
@@ -69,12 +71,18 @@ def wrapper_data_loaders(
         Splitting ratios for DESI-only sources.
     random_seed_split_only_DESI : int
         Seed for splitting DESI-only sources.
+    define_dataset_loaders_keys : list of str
+        List of keys to include in the DataLoaders (e.g. ['DESI_combined', 'DESI_only', 'DESI_matched', 'JPAS_matched']).
     keys_xx : list of str
         Feature keys to include (e.g. ['OBS', 'ERR', 'MORPHTYPE_int']).
     keys_yy : list of str
         Label keys to include (e.g. ['SPECTYPE_int']).
+    normalization_source_key : str
+        Key to use for normalization (e.g. 'DESI_combined').
     normalize : bool
         Whether to normalize input features. Normalization statistics are taken from the training set.
+    provided_normalization : tuple of list of float, optional
+        Pre-computed mean and std values for normalization.
 
     Returns:
     -------
@@ -143,46 +151,76 @@ def wrapper_data_loaders(
     # 5. Create DataLoaders for all training subsets
     # ───────────────────────────────────────────────────── #
     logging.info("\n\n5️⃣: Initializing DataLoader objects...")
-    dset_loaders = {"DESI_combined": {}, "DESI_matched": {}, "JPAS_matched": {}}
 
-    for key_dset in ["train", "val", "test"]:
-        logging.info(f"⚙️ Preparing split: {key_dset}")
+    if define_dataset_loaders_keys is None:
+        define_dataset_loaders_keys = ["DESI_combined", "DESI_only", "DESI_matched", "JPAS_matched"]
 
-        # 5.1 DESI combined (only + matched)
-        logging.info("├── DESI_combined")
-        LoA, xx, yy = process_dset_splits.extract_and_combine_DESI_data(
-            Dict_LoA_split["only"]["DESI"][key_dset],
-            Dict_LoA_split["both"]["DESI"][key_dset],
-            DATA["DESI"], keys_xx, keys_yy
-        )
-        dset_loaders["DESI_combined"][key_dset] = data_loaders.DataLoader(
-            xx, yy, normalize=normalize, provided_normalization=provided_normalization
-        )
-        if key_dset == "train" and provided_normalization is None:
-            provided_normalization = (
-                dset_loaders["DESI_combined"]["train"].means,
-                dset_loaders["DESI_combined"]["train"].stds
+    # Ensure the requested dataset keys are valid
+    valid = {"DESI_combined", "DESI_only", "DESI_matched", "JPAS_matched"}
+    bad = set(define_dataset_loaders_keys) - valid
+    if bad:
+        raise ValueError(f"Unknown dataset keys: {bad}")
+
+    # Ensure the requested normalization source is valid
+    if normalization_source_key is not None and normalization_source_key not in define_dataset_loaders_keys:
+        raise ValueError(f"Normalization source '{normalization_source_key}' was requested, "
+                        f"but it is not among the selected loaders: {define_dataset_loaders_keys}")
+
+    # Initialize empty loader dict
+    dset_loaders = {key: {} for key in define_dataset_loaders_keys}
+
+    # ─────────────────────────────────────── #
+    # 5.1 First pass: compute normalization
+    # ─────────────────────────────────────── #
+    if provided_normalization is None and normalization_source_key is not None:
+        logging.info(f"📏 Computing normalization from anchor '{normalization_source_key}' (train only)")
+        key_dset = "train"
+        if normalization_source_key == "DESI_combined":
+            LoA, xx, yy = process_dset_splits.extract_and_combine_DESI_data(
+                Dict_LoA_split["only"]["DESI"][key_dset], Dict_LoA_split["both"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
+            )
+        elif normalization_source_key == "DESI_only":
+            LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
+                Dict_LoA_split["only"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
+            )
+        elif normalization_source_key == "DESI_matched":
+            LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
+                Dict_LoA_split["both"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
+            )
+        elif normalization_source_key == "JPAS_matched":
+            LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
+                Dict_LoA_split["both"]["JPAS"][key_dset], DATA["JPAS"], keys_xx, keys_yy
             )
 
-        # 5.2 DESI matched
-        logging.info("├── DESI_matched")
-        LoA, xx, yy = process_dset_splits.extract_data_matched(
-            Dict_LoA_split["both"]["DESI"][key_dset],
-            DATA["DESI"], keys_xx, keys_yy
-        )
-        dset_loaders["DESI_matched"][key_dset] = data_loaders.DataLoader(
-            xx, yy, normalize=normalize, provided_normalization=provided_normalization
-        )
+        anchor_loader = data_loaders.DataLoader(xx, yy, normalize=True)
+        provided_normalization = (anchor_loader.means, anchor_loader.stds)
 
-        # 5.3 JPAS matched
-        logging.info("├── JPAS_matched")
-        LoA, xx, yy = process_dset_splits.extract_data_matched(
-            Dict_LoA_split["both"]["JPAS"][key_dset],
-            DATA["JPAS"], keys_xx, keys_yy
-        )
-        dset_loaders["JPAS_matched"][key_dset] = data_loaders.DataLoader(
-            xx, yy, normalize=normalize, provided_normalization=provided_normalization
-        )
+    # ─────────────────────────────────────── #
+    # 5.2 Second pass: build all DataLoaders
+    # ─────────────────────────────────────── #
+    for key_dset in ["train", "val", "test"]:
+        logging.info(f"⚙️ Preparing split: {key_dset}")
+        for key_loader in define_dataset_loaders_keys:
+            logging.info(f"├── {key_loader}")
+            if key_loader == "DESI_combined":
+                LoA, xx, yy = process_dset_splits.extract_and_combine_DESI_data(
+                    Dict_LoA_split["only"]["DESI"][key_dset], Dict_LoA_split["both"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
+                )
+            elif key_loader == "DESI_only":
+                LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
+                    Dict_LoA_split["only"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
+                )
+            elif key_loader == "DESI_matched":
+                LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
+                    Dict_LoA_split["both"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
+                )
+            elif key_loader == "JPAS_matched":
+                LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
+                    Dict_LoA_split["both"]["JPAS"][key_dset], DATA["JPAS"], keys_xx, keys_yy
+                )
+            dset_loaders[key_loader][key_dset] = data_loaders.DataLoader(
+                xx, yy, normalize=normalize, provided_normalization=provided_normalization
+            )
 
     logging.info("✅ DataLoader preparation complete.")
     return dset_loaders

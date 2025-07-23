@@ -67,6 +67,8 @@ features_labels_options = {
     "normalization_source_key": "DESI_only" # "DESI_combined", "DESI_only", "DESI_matched", "JPAS_matched"
 }
 
+class_names = ['GALAXY', 'QSO_high', 'QSO_low', 'STAR']
+
 load_DESI_data_Lilianne = [
 {
     "name": "train",

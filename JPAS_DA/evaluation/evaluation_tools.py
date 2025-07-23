@@ -15,6 +15,9 @@ from sklearn.preprocessing import label_binarize
 from scipy.stats import binned_statistic_2d
 from scipy.ndimage import gaussian_filter
 
+from sklearn.metrics import roc_curve
+from scipy.interpolate import interp1d
+
 from JPAS_DA.utils.plotting_utils import get_N_colors
 
 def assert_array_lists_equal(list1, list2, rtol=1e-5, atol=1e-8) -> bool:
@@ -338,6 +341,51 @@ def plot_multiclass_roc(y_true_1, y_pred_P_1, y_true_2, y_pred_P_2, class_names=
     plt.tight_layout()
     plt.show()
 
+
+def safe_interp(fpr, tpr, x_new):
+    fpr_unique, idx = np.unique(fpr, return_index=True)
+    tpr_unique = tpr[idx]
+    interpolator = interp1d(fpr_unique, tpr_unique, kind='linear', bounds_error=False, fill_value='extrapolate')
+    y_new = interpolator(x_new)
+    return np.nan_to_num(y_new, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def plot_multiclass_roc_diff_tpr(y_true_1, y_pred_P_1, y_true_2, y_pred_P_2,
+                                  class_names=None, name_1="Model 1", name_2="Model 2"):
+
+    classes = np.unique(np.concatenate([y_true_1, y_true_2]))
+    y_true_1_bin = label_binarize(y_true_1, classes=classes)
+    y_true_2_bin = label_binarize(y_true_2, classes=classes)
+    colors = get_N_colors(len(classes), plt.cm.tab10)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.axhline(0, color="black", linestyle="--", lw=1)
+
+    for i, cls in enumerate(classes):
+        # Compute ROC curves
+        fpr1, tpr1, _ = roc_curve(y_true_1_bin[:, i], y_pred_P_1[:, i])
+        fpr2, tpr2, _ = roc_curve(y_true_2_bin[:, i], y_pred_P_2[:, i])
+
+        # Interpolate both TPRs on a common FPR grid
+        fpr_common = np.linspace(0, 1, 200)
+        interp_tpr1 = safe_interp(fpr1, tpr1, fpr_common)
+        interp_tpr2 = safe_interp(fpr2, tpr2, fpr_common)
+
+        diff_tpr = interp_tpr2 - interp_tpr1
+        label = f"Class {cls}" if class_names is None else class_names[i]
+        ax.plot(fpr_common, diff_tpr, color=colors[i % len(colors)], lw=2, label=label)
+
+    ax.axhline(0, color="black", linestyle="--", lw=1)
+    ax.set_xlim([0.0, 1.0])
+    ax.set_xlabel("False Positive Rate (FPR)", fontsize=14)
+    ax.set_ylabel(f"TPR Difference ({name_2} - {name_1})", fontsize=14)
+    ax.set_title("ΔTPR per Class vs FPR", fontsize=16)
+    ax.legend(fontsize=10, loc="best")
+    ax.grid(True, linestyle='--', alpha=0.6)
+    ax.set_yscale("symlog", linthresh=1e-2)
+    plt.tight_layout()
+    plt.show()
+
 def compare_sets_performance(
     yy_true_1, yy_pred_P_1,
     yy_true_2, yy_pred_P_2,
@@ -398,6 +446,14 @@ def compare_sets_performance(
 
     # ROC Curves
     plot_multiclass_roc(
+        yy_true_1, yy_pred_P_1,
+        yy_true_2, yy_pred_P_2,
+        class_names=class_names,
+        name_1=name_1,
+        name_2=name_2
+    )
+
+    plot_multiclass_roc_diff_tpr(
         yy_true_1, yy_pred_P_1,
         yy_true_2, yy_pred_P_2,
         class_names=class_names,

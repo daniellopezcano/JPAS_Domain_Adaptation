@@ -117,15 +117,15 @@ def train_model(
     # Set up optimizers
     if freeze_downstream_model:
         optimizer = torch.optim.AdamW(model_encoder.parameters(), lr=lr, weight_decay=weight_decay)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=30, factor=0.3, min_lr=1e-8, verbose=True)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=30, factor=0.3, min_lr=1e-8)
     else:
         optimizer = {
             "encoder": torch.optim.AdamW(model_encoder.parameters(), lr=lr, weight_decay=weight_decay),
             "downstream": torch.optim.AdamW(model_downstream.parameters(), lr=lr, weight_decay=weight_decay)
         }
         scheduler = {
-            "encoder": torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer["encoder"], mode='min', patience=30, factor=0.3, min_lr=1e-8, verbose=True),
-            "downstream": torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer["downstream"], mode='min', patience=30, factor=0.3, min_lr=1e-8, verbose=True)
+            "encoder": torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer["encoder"], mode='min', patience=30, factor=0.3, min_lr=1e-8),
+            "downstream": torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer["downstream"], mode='min', patience=30, factor=0.3, min_lr=1e-8)
         }
 
     # === Training Loop ===

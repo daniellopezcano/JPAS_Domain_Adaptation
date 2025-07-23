@@ -15,8 +15,8 @@ def load_means_stds(
     means_path = os.path.join(path_dir, means_file_name)
     stds_path = os.path.join(path_dir, stds_file_name)
 
-    logging.debug(f"📥 Loading means from: {means_path}")
-    logging.debug(f"📥 Loading stds from: {stds_path}")
+    logging.info(f"📥 Loading means from: {means_path}")
+    logging.info(f"📥 Loading stds from: {stds_path}")
 
     means = [arr.astype(dtype) for arr in np.load(means_path, allow_pickle=True)]
     stds  = [arr.astype(dtype) for arr in np.load(stds_path, allow_pickle=True)]

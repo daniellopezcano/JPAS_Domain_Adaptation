@@ -74,6 +74,9 @@ def load_and_massage_config_file(config_path, run_name):
     if config["data"]["dict_clean_data_options"] == "default_global_setup":
         config["data"]["dict_clean_data_options"] = global_setup.dict_clean_data_options
     
+    if config["data"]["dict_split_data_options"] == "default_global_setup":
+        config["data"]["dict_split_data_options"] = global_setup.dict_split_data_options
+
     # === Training === #
     if config["training"]["path_save"] == "default_global_setup":
         config["training"]["path_save"] = os.path.join(global_setup.path_models, run_name)
@@ -104,7 +107,7 @@ def wrapper_data_loaders_from_config(dict_data):
     split_opts             = dict_data['dict_split_data_options']
     feature_opts           = dict_data['features_labels_options']
     provided_normalization = dict_data.get('provided_normalization', None)
-
+    
     logging.info("🔧 Launching wrapper_data_loaders with loaded configuration...")
     dset_loaders = wrapper_data_loaders.wrapper_data_loaders(
         root_path                   = data_paths['root_path'],
@@ -128,10 +131,11 @@ def wrapper_data_loaders_from_config(dict_data):
         test_ratio_only_DESI        = split_opts['test_ratio_only_DESI'],
         random_seed_split_only_DESI = split_opts['random_seed_split_only_DESI'],
 
+        define_dataset_loaders_keys = feature_opts['define_dataset_loaders_keys'],
         keys_xx                     = feature_opts['keys_xx'],
         keys_yy                     = feature_opts['keys_yy'],
+        normalization_source_key    = feature_opts['normalization_source_key'],
         normalize                   = feature_opts['normalize'],
-
         provided_normalization      = provided_normalization
     )
 

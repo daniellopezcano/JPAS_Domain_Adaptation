@@ -174,7 +174,7 @@ def plot_2d_classification_with_kde(X_all, y_all, title="2D Data with Class-Cond
     """
     unique_labels = np.unique(y_all)
     if class_color_dict is None:
-        cmap = plt.cm.get_cmap('tab10', len(unique_labels))
+        cmap = plt.colormaps.get_cmap('tab10', len(unique_labels))
         class_color_dict = {label: cmap(i) for i, label in enumerate(unique_labels)}
     colors = [class_color_dict[label] for label in unique_labels]
 
@@ -580,6 +580,73 @@ def plot_histogram_with_ranges(magnitudes, ranges=None, colors=None, bins=200, x
 
     # Return the dictionary of masks
     return masks_dict
+
+def plot_histogram_with_ranges_multiple(mag_dict, ranges, colors, bins=200, x_label='DESI Magnitude (R)', title='Histogram of DESI R Magnitudes (by split and loader)'):
+    """
+    Plot multiple histograms of magnitudes with color-coded background bands and annotate object counts.
+
+    Parameters:
+    mag_dict (dict): Dictionary with keys as (key_dset, key_loader) and values as 1D magnitude arrays.
+    ranges (list of tuple): List of magnitude (min, max) ranges.
+    colors (list of str): Background colors for each range.
+    bins (int): Histogram bins.
+    x_label (str): X-axis label.
+    title (str): Plot title.
+
+    Returns:
+    dict: Nested dict with masks per range for each (key_dset, key_loader).
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+    masks_all = {}
+
+    # Background colored regions for magnitude ranges
+    for (lower, upper), color in zip(ranges, colors):
+        ax.axvspan(lower, upper, color=color, alpha=0.5)
+
+    # Plot histograms for each split/loader combo
+    for (key_dset, key_loader), magnitudes in mag_dict.items():
+        valid = np.isfinite(magnitudes)
+        magnitudes = magnitudes[valid]
+        label = f"{key_dset} | {key_loader}"
+        color_index = list(mag_dict.keys()).index((key_dset, key_loader)) % len(colors)
+
+        hist_counts, edges = np.histogram(magnitudes, bins=bins, range=(np.nanmin(magnitudes), np.nanmax(magnitudes)))
+        centers = (edges[:-1] + edges[1:]) / 2
+        line_color = colors[color_index]
+        ax.plot(centers, hist_counts/np.sum(hist_counts), label=label, color=line_color, linewidth=2)
+
+        # Store range masks and annotate counts
+        masks_all[(key_dset, key_loader)] = {}
+        for (lower, upper) in ranges:
+            mask = (magnitudes >= lower) & (magnitudes < upper)
+            count = np.sum(mask)
+            masks_all[(key_dset, key_loader)][(lower, upper)] = mask
+
+            # Add annotation
+            x_pos = (lower + upper) / 2
+            y_pos = np.max(hist_counts/np.sum(hist_counts)) * 0.9 - color_index * (np.max(hist_counts/np.sum(hist_counts)) * 0.1)
+            ax.text(
+                x_pos, y_pos,
+                f'{count}',
+                color=line_color,
+                fontsize=10,
+                ha='center',
+                va='center',
+                bbox=dict(facecolor='white', edgecolor=line_color, boxstyle='round,pad=0.3', linewidth=1.5)
+            )
+
+    ax.set_xlabel(x_label, fontsize=14)
+    ax.set_ylabel('Frequency', fontsize=14)
+    ax.set_title(title, fontsize=16)
+    ax.legend(fontsize=10)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+    ax.set_yscale('log')
+    ax.set_ylim(0.008, 0.11)
+    ax.set_xlim(15.5, 24.7)
+    plt.tight_layout()
+    plt.show()
+
+    return masks_all
 
 def plot_training_curves(path_save):
     # Load training data

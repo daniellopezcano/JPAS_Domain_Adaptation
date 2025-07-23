@@ -363,11 +363,12 @@ def clean_and_mask_data(
     if "negative_errors" in apply_masks:
         JPAS_err, DESI_err, error_masks = take_abs_value_of_negative_errors(JPAS_err, DESI_err)
         masks.update(error_masks)
-
+    
     # Step 6: Split between High and Low redshift quasars
     if z_lim_QSO_cut is not None:
         logging.info("├── Splitting between High and Low z QSOs")
         for survey in list(DATA_pd.keys()):
+            DATA_pd[survey]['SPECTYPE'] = list(DATA_pd[survey]['SPECTYPE'])
             for ii in range(len(DATA_pd[survey]['SPECTYPE'])):
                 if DATA_pd[survey]['SPECTYPE'][ii] == "QSO":
                     if DATA_pd[survey]['REDSHIFT'][ii] < z_lim_QSO_cut:
@@ -375,12 +376,9 @@ def clean_and_mask_data(
                     else:
                         DATA_pd[survey]['SPECTYPE'][ii] = "QSO_high"
 
-    # Step 7: Sample DESI with the corresponding simulated variance
-    DESI_obs = np.random.normal(loc=DESI_mean, scale=DESI_err)
-
-    # Step 8: Encode strings to integers (SPECTYPE and MORPHTYPE)
-    all_morphs = list(DATA_pd["DESI"]['SPECTYPE']) + list(DATA_pd["JPAS"]['SPECTYPE'])
-    _, shared_mapping = encode_strings_to_integers(all_morphs)
+    # Step 7: Encode strings to integers (SPECTYPE and MORPHTYPE)
+    all_specs = list(DATA_pd["DESI"]['SPECTYPE']) + list(DATA_pd["JPAS"]['SPECTYPE'])
+    _, shared_mapping = encode_strings_to_integers(all_specs)
     DESI_SPECTYPE_int, _ = encode_strings_to_integers(list(DATA_pd["DESI"]['SPECTYPE']), reference_mapping=shared_mapping)
     JPAS_SPECTYPE_int, _ = encode_strings_to_integers(list(DATA_pd["JPAS"]['SPECTYPE']), reference_mapping=shared_mapping)
 
@@ -389,7 +387,7 @@ def clean_and_mask_data(
     DESI_MORPHTYPE_int, _ = encode_strings_to_integers(list(DATA_pd["DESI"]['MORPHTYPE']), reference_mapping=shared_mapping)
     JPAS_MORPHTYPE_int, _ = encode_strings_to_integers(list(DATA_pd["JPAS"]['MORPHTYPE']), reference_mapping=shared_mapping)
 
-    # Step 9: Create clean dictionary
+    # Step 8: Create clean dictionary
     DATA_clean = {}
     for survey in list(DATA_pd.keys()):
         DATA_clean[survey] = {}
@@ -399,6 +397,9 @@ def clean_and_mask_data(
             if survey in key:
                 new_key = key[len(survey) + 1:]
                 DATA_clean[survey][new_key] = masks[key]
+
+    # Step 9: Sample DESI with the corresponding simulated variance
+    DESI_obs = np.random.normal(loc=DESI_mean, scale=DESI_err)
 
     survey = "DESI"
     DATA_clean[survey]["MEAN"] = DESI_mean

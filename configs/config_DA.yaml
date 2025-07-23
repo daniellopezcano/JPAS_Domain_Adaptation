@@ -15,23 +15,16 @@ data:
   dict_clean_data_options: default_global_setup
 
   # ── Train/val/test splits ──
-  dict_split_data_options:
-    train_ratio_both: 0.8
-    val_ratio_both: 0.1
-    test_ratio_both: 0.1
-    random_seed_split_both: 0
-
-    train_ratio_only_DESI: 0.8
-    val_ratio_only_DESI: 0.1
-    test_ratio_only_DESI: 0.1
-    random_seed_split_only_DESI: 0
+  dict_split_data_options: default_global_setup
 
   # ── Input/output keys ──
   features_labels_options:
-    keys_xx: [OBS, ERR, MORPHTYPE_int]
-    keys_yy: [SPECTYPE_int, TARGETID]
+    define_dataset_loaders_keys: [DESI_only, JPAS_matched]
+    keys_xx: [OBS, MORPHTYPE_int]
+    keys_yy: [SPECTYPE_int]
     normalize: true
-    key_survey_training: JPAS_matched # JPAS_matched, DESI_matched, DESI_combined
+    normalization_source_key: DESI_only
+    key_survey_training: JPAS_matched
 
 # ════════════════════════════════════════════════════════════════════
 # Model Architecture

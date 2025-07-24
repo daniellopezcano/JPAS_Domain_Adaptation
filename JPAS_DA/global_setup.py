@@ -43,19 +43,21 @@ dict_clean_data_options = {
     "mask_indices"        : [0, -2],
     "magic_numbers"       : [-99, 99],
     "i_band_sn_threshold" : 0,
-    "z_lim_QSO_cut"       : 2.2
+    "magnitude_flux_key"  : "DESI_FLUX_R",
+    "magnitude_threshold" : 22.5,
+    "z_lim_QSO_cut"       : 2.1
 }
 
 dict_split_data_options = {
     # Splitting ratios for matched (both) datasets
-    "train_ratio_both"            : 0.50,
-    "val_ratio_both"              : 0.25,
-    "test_ratio_both"             : 0.25,
+    "train_ratio_both"            : 0.45,
+    "val_ratio_both"              : 0.1,
+    "test_ratio_both"             : 0.45,
     "random_seed_split_both"      : default_seed,
     # Splitting ratios for DESI-only dataset
-    "train_ratio_only_DESI"       : 0.80,
-    "val_ratio_only_DESI"         : 0.10,
-    "test_ratio_only_DESI"        : 0.10,
+    "train_ratio_only_DESI"       : 0.70,
+    "val_ratio_only_DESI"         : 0.15,
+    "test_ratio_only_DESI"        : 0.15,
     "random_seed_split_only_DESI": default_seed
 }
 

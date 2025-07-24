@@ -16,6 +16,8 @@ def wrapper_data_loaders(
     mask_indices: List[int],
     magic_numbers: List[float],
     i_band_sn_threshold: float,
+    magnitude_flux_key: Optional[str],
+    magnitude_threshold: Optional[float],
     z_lim_QSO_cut: float,
     train_ratio_both: float,
     val_ratio_both: float,
@@ -61,6 +63,10 @@ def wrapper_data_loaders(
         Values to treat as invalid (e.g. 99, -99).
     i_band_sn_threshold : float
         Minimum signal-to-noise required in the i-band (or relevant band).
+    magnitude_flux_key : str, optional
+        Flux key to compute magnitude ('DESI_FLUX_R', etc.).
+    magnitude_threshold : float, optional
+        Upper magnitude limit to keep samples.
     z_lim_QSO_cut : float
         Upper redshift limit for QSO cut in cleaning.
     train_ratio_both / val_ratio_both / test_ratio_both : float
@@ -117,6 +123,8 @@ def wrapper_data_loaders(
         mask_indices=mask_indices,
         magic_numbers=magic_numbers,
         i_band_sn_threshold=i_band_sn_threshold,
+        magnitude_flux_key=magnitude_flux_key,
+        magnitude_threshold=magnitude_threshold,
         z_lim_QSO_cut=z_lim_QSO_cut
     )
 

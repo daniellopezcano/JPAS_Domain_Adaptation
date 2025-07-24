@@ -119,6 +119,8 @@ def wrapper_data_loaders_from_config(dict_data):
         mask_indices                = clean_opts['mask_indices'],
         magic_numbers               = clean_opts['magic_numbers'],
         i_band_sn_threshold         = clean_opts['i_band_sn_threshold'],
+        magnitude_flux_key          = clean_opts['magnitude_flux_key'],
+        magnitude_threshold         = clean_opts['magnitude_threshold'],
         z_lim_QSO_cut               = clean_opts['z_lim_QSO_cut'],
 
         train_ratio_both            = split_opts['train_ratio_both'],

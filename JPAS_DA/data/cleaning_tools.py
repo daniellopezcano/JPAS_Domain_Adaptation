@@ -192,48 +192,75 @@ def remove_invalid_NaN_rows(JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA, magic
 
     return JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd
 
-def apply_additional_filters(JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd, i_band_sn_threshold=20):
+def apply_additional_filters(
+    JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd,
+    i_band_sn_threshold=20,
+    magnitude_flux_key=None, magnitude_threshold=None
+):
     """
-    Applies additional filters based on the i-band signal-to-noise ratio (S/N).
-    Removes rows from JPAS and DESI datasets where the i-band S/N is below the given threshold.
-    
+    Applies filters based on the i-band S/N and optionally a magnitude threshold for a given DESI_FLUX_X key.
+
     Parameters:
     - JPAS_obs (np.ndarray): JPAS observation data.
     - JPAS_err (np.ndarray): JPAS error data.
     - DESI_mean (np.ndarray): DESI simulated means.
     - DESI_err (np.ndarray): DESI simulated errors.
     - DATA_pd (dict): Dictionary containing JPAS and DESI CSV data.
-    - sn_threshold (float): S/N threshold. Rows with i-band S/N below this value will be removed.
-    
+    - i_band_sn_threshold (float): Minimum i-band S/N to keep a sample.
+    - magnitude_flux_key (str, optional): Flux key to compute magnitude ('DESI_FLUX_R', etc.).
+    - magnitude_threshold (float, optional): Upper magnitude limit to keep samples.
+
     Returns:
-    - JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd: The filtered arrays and updated dictionary.
+    - Filtered JPAS_obs, JPAS_err, DESI_mean, DESI_err, and updated DATA_pd dictionary.
     """
     logging.info("├── apply_additional_filters()")
-    
-    # Compute i-band Signal-to-Noise ratio (S/N)
-    JPAS_i_band_SN = JPAS_obs[:, -1] / np.abs(JPAS_err[:, -1])  # Assuming i-band is index -1
-    DESI_i_band_SN = DESI_mean[:, -1] / np.abs(DESI_err[:, -1])   # Assuming i-band is index -1
 
-    # Create masks based on the S/N threshold
-    valid_JPAS_indices = np.where(JPAS_i_band_SN >= i_band_sn_threshold)[0]
-    valid_DESI_indices = np.where(DESI_i_band_SN >= i_band_sn_threshold)[0]
-    
-    JPAS_valid_pct = round(len(valid_JPAS_indices) / JPAS_obs.shape[0] * 100, 2) if JPAS_obs.shape[0] > 0 else 0
-    DESI_valid_pct = round(len(valid_DESI_indices) / DESI_mean.shape[0] * 100, 2) if DESI_mean.shape[0] > 0 else 0
-    logging.info(f"│   ├── JPAS: {len(valid_JPAS_indices)} valid rows (S/N ≥ {i_band_sn_threshold}) ({JPAS_valid_pct}%)")
-    logging.info(f"│   ├── DESI: {len(valid_DESI_indices)} valid rows (S/N ≥ {i_band_sn_threshold}) ({DESI_valid_pct}%)")
-    
-    # Apply the filtering to the arrays
-    JPAS_obs = JPAS_obs[valid_JPAS_indices]
-    JPAS_err = JPAS_err[valid_JPAS_indices]
-    DESI_mean = DESI_mean[valid_DESI_indices]
-    DESI_err = DESI_err[valid_DESI_indices]
-    
-    # Filter dictionary entries (CSV data) using the same valid indices
-    DATA_pd["JPAS"] = filter_preserve_type(DATA_pd["JPAS"], valid_JPAS_indices)
-    DATA_pd["DESI"] = filter_preserve_type(DATA_pd["DESI"], valid_DESI_indices)
-    
-    logging.info("│   ├── Additional filters applied successfully.")
+    # Step 1: Apply i-band S/N filtering (assume i-band is last column)
+    logging.info(f"│   ├── Applying i-band S/N ≥ {i_band_sn_threshold}")
+    sn_masks = {}
+    sn_masks["JPAS"] = JPAS_obs[:, -1] / np.abs(JPAS_err[:, -1]) >= i_band_sn_threshold
+    sn_masks["DESI"] = DESI_mean[:, -1] / np.abs(DESI_err[:, -1]) >= i_band_sn_threshold
+
+    for key, mask in sn_masks.items():
+        n_total = JPAS_obs.shape[0] if key == "JPAS" else DESI_mean.shape[0]
+        logging.info(f"│   │   ├── {key}: {np.sum(mask)} valid rows ({100 * np.sum(mask) / n_total:.2f}%)")
+
+    # Step 2: Apply optional magnitude cut for both JPAS and DESI
+    mag_masks = { "JPAS": np.ones_like(sn_masks["JPAS"], dtype=bool), "DESI": np.ones_like(sn_masks["DESI"], dtype=bool) }
+
+    if magnitude_flux_key is not None and magnitude_threshold is not None:
+        logging.info(f"│   ├── Applying magnitude filter: {magnitude_flux_key} ≤ {magnitude_threshold}")
+
+        for key in ["JPAS", "DESI"]:
+            if magnitude_flux_key in DATA_pd[key]:
+                flux = np.array(DATA_pd[key][magnitude_flux_key])
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    mag = 22.5 - 2.5 * np.log10(flux)
+                mask_valid = np.isfinite(mag) & (mag <= magnitude_threshold)
+                mag_masks[key] = mask_valid
+                n_valid = np.sum(mask_valid)
+                n_total = flux.shape[0]
+                logging.info(f"│   │   ├── {key}: {n_valid} valid rows after magnitude filter ({100 * n_valid / n_total:.2f}%)")
+            else:
+                logging.warning(f"│   │   ├── {key}: flux key '{magnitude_flux_key}' not found in DATA_pd[{key}] → skipping magnitude cut")
+
+    # Step 3: Combine S/N and magnitude masks
+    combined_masks = {
+        "JPAS": sn_masks["JPAS"] & mag_masks["JPAS"],
+        "DESI": sn_masks["DESI"] & mag_masks["DESI"]
+    }
+
+    # Step 4: Apply filters to arrays
+    JPAS_obs = JPAS_obs[combined_masks["JPAS"]]
+    JPAS_err = JPAS_err[combined_masks["JPAS"]]
+    DESI_mean = DESI_mean[combined_masks["DESI"]]
+    DESI_err = DESI_err[combined_masks["DESI"]]
+
+    # Step 5: Filter pandas-like structures
+    DATA_pd["JPAS"] = filter_preserve_type(DATA_pd["JPAS"], np.where(combined_masks["JPAS"])[0])
+    DATA_pd["DESI"] = filter_preserve_type(DATA_pd["DESI"], np.where(combined_masks["DESI"])[0])
+
+    logging.info("│   ├── Final filtering applied successfully.")
 
     return JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd
 
@@ -262,6 +289,7 @@ def encode_strings_to_integers(
         raise ValueError("Input must be a list of strings.")
 
     string_array = np.array(string_list, dtype=str)
+    total = len(string_array)
 
     if reference_mapping is None:
         unique_strings = np.unique(string_array)
@@ -276,12 +304,21 @@ def encode_strings_to_integers(
             logging.warning(f"|    ├── ⚠️ Unmapped categories found: {missing}")
         logging.info(f"|    ├── 📌 Used Provided Mapping: {mapping}")
 
-    logging.info(f"├── Encoding complete ({len(mapping)} categories).")
+    # Log counts per category
+    logging.info(f"│    ├── 📊 Category Breakdown ({total} total):")
+    inverse_mapping = {v: k for k, v in mapping.items()}
+    for idx in range(len(mapping)):
+        count = np.sum(encoded == idx)
+        pct = 100 * count / total if total > 0 else 0.0
+        label = inverse_mapping[idx]
+        logging.info(f"│    │   ├── {label:<15} → {count:>5} ({pct:.2f}%)")
+
+    logging.info(f"├── ✅ Encoding complete ({len(mapping)} categories).")
     return encoded, mapping
 
 def clean_and_mask_data(
         DATA, apply_masks=['unreliable', "jpas_ignasi_dense", 'apply_additional_filters', 'magic_numbers', 'negative_errors', 'nan_values'],
-        mask_indices=[0, -2], magic_numbers=[99, -99], i_band_sn_threshold=20, z_lim_QSO_cut=None
+        mask_indices=[0, -2], magic_numbers=[99, -99], i_band_sn_threshold=20, magnitude_flux_key=None, magnitude_threshold=None, z_lim_QSO_cut=None
     ):
     """
     Main function to clean and mask observational and simulated datasets.
@@ -343,7 +380,9 @@ def clean_and_mask_data(
     # Step 2: Apply additional filters
     if "apply_additional_filters" in apply_masks:
         JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd = apply_additional_filters(
-            JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd, i_band_sn_threshold=i_band_sn_threshold
+            JPAS_obs, JPAS_err, DESI_mean, DESI_err, DATA_pd,
+            i_band_sn_threshold=i_band_sn_threshold,
+            magnitude_flux_key=magnitude_flux_key, magnitude_threshold=magnitude_threshold
         )
 
     masks = {}  # Dictionary to store applied masks
@@ -366,7 +405,7 @@ def clean_and_mask_data(
     
     # Step 6: Split between High and Low redshift quasars
     if z_lim_QSO_cut is not None:
-        logging.info("├── Splitting between High and Low z QSOs")
+        logging.info("├── Splitting between High and Low QSOs, z_lim_QSO_cut: " + str(z_lim_QSO_cut))
         for survey in list(DATA_pd.keys()):
             DATA_pd[survey]['SPECTYPE'] = list(DATA_pd[survey]['SPECTYPE'])
             for ii in range(len(DATA_pd[survey]['SPECTYPE'])):

@@ -642,7 +642,7 @@ def plot_histogram_with_ranges_multiple(mag_dict, ranges, colors, bins=200, x_la
     ax.tick_params(axis='both', which='major', labelsize=12)
     ax.set_yscale('log')
     ax.set_ylim(0.008, 0.11)
-    ax.set_xlim(15.5, 24.7)
+    ax.set_xlim(17, 22.5)
     plt.tight_layout()
     plt.show()
 

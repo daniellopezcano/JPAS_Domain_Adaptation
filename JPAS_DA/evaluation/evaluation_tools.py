@@ -311,86 +311,13 @@ def multiclass_brier_score(y_true, y_prob, n_classes=None):
     y_true_one_hot = np.eye(n_classes)[y_true]
     return np.mean(np.sum((y_prob - y_true_one_hot) ** 2, axis=1))
 
-def plot_multiclass_roc(y_true_1, y_pred_P_1, y_true_2, y_pred_P_2, class_names=None, name_1="Model 1", name_2="Model 2"):
-
-    classes = np.unique(np.concatenate([y_true_1, y_true_2]))
-    y_true_1_bin = label_binarize(y_true_1, classes=classes)
-    y_true_2_bin = label_binarize(y_true_2, classes=classes)
-    colors = get_N_colors(len(classes), plt.cm.tab10)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-
-    for i, cls in enumerate(classes):
-        fpr1, tpr1, _ = roc_curve(y_true_1_bin[:, i], y_pred_P_1[:, i])
-        fpr2, tpr2, _ = roc_curve(y_true_2_bin[:, i], y_pred_P_2[:, i])
-        auc1 = auc(fpr1, tpr1)
-        auc2 = auc(fpr2, tpr2)
-
-        label = f"Class {cls}" if class_names is None else class_names[i]
-        ax.plot(fpr1, tpr1, linestyle='-', color=colors[i], label=f"{label} ({name_1}) [AUC={auc1:.2f}]")
-        ax.plot(fpr2, tpr2, linestyle='--', color=colors[i], label=f"{label} ({name_2}) [AUC={auc2:.2f}]")
-
-    ax.plot([0, 1], [0, 1], 'k--', lw=1)
-    ax.set_xlim([0.0, 1.0])
-    ax.set_ylim([0.0, 1.05])
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("Multiclass ROC Curves")
-    ax.legend(fontsize=9, loc="lower right")
-    ax.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-
-def safe_interp(fpr, tpr, x_new):
-    fpr_unique, idx = np.unique(fpr, return_index=True)
-    tpr_unique = tpr[idx]
-    interpolator = interp1d(fpr_unique, tpr_unique, kind='linear', bounds_error=False, fill_value='extrapolate')
-    y_new = interpolator(x_new)
-    return np.nan_to_num(y_new, nan=0.0, posinf=0.0, neginf=0.0)
-
-
-def plot_multiclass_roc_diff_tpr(y_true_1, y_pred_P_1, y_true_2, y_pred_P_2,
-                                  class_names=None, name_1="Model 1", name_2="Model 2"):
-
-    classes = np.unique(np.concatenate([y_true_1, y_true_2]))
-    y_true_1_bin = label_binarize(y_true_1, classes=classes)
-    y_true_2_bin = label_binarize(y_true_2, classes=classes)
-    colors = get_N_colors(len(classes), plt.cm.tab10)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.axhline(0, color="black", linestyle="--", lw=1)
-
-    for i, cls in enumerate(classes):
-        # Compute ROC curves
-        fpr1, tpr1, _ = roc_curve(y_true_1_bin[:, i], y_pred_P_1[:, i])
-        fpr2, tpr2, _ = roc_curve(y_true_2_bin[:, i], y_pred_P_2[:, i])
-
-        # Interpolate both TPRs on a common FPR grid
-        fpr_common = np.linspace(0, 1, 200)
-        interp_tpr1 = safe_interp(fpr1, tpr1, fpr_common)
-        interp_tpr2 = safe_interp(fpr2, tpr2, fpr_common)
-
-        diff_tpr = interp_tpr2 - interp_tpr1
-        label = f"Class {cls}" if class_names is None else class_names[i]
-        ax.plot(fpr_common, diff_tpr, color=colors[i % len(colors)], lw=2, label=label)
-
-    ax.axhline(0, color="black", linestyle="--", lw=1)
-    ax.set_xlim([0.0, 1.0])
-    ax.set_xlabel("False Positive Rate (FPR)", fontsize=14)
-    ax.set_ylabel(f"TPR Difference ({name_2} - {name_1})", fontsize=14)
-    ax.set_title("ΔTPR per Class vs FPR", fontsize=16)
-    ax.legend(fontsize=10, loc="best")
-    ax.grid(True, linestyle='--', alpha=0.6)
-    ax.set_yscale("symlog", linthresh=1e-2)
-    plt.tight_layout()
-    plt.show()
-
 def compare_sets_performance(
     yy_true_1, yy_pred_P_1,
     yy_true_2, yy_pred_P_2,
     class_names=None,
-    name_1="Set 1", name_2="Set 2"
+    y_min_Delta_F1=-0.2, y_max_Delta_F1=0.2,
+    name_1="Set 1", name_2="Set 2",
+    plot_ROC_curves = True
 ):
     yy_pred_1 = np.argmax(yy_pred_P_1, axis=1)
     yy_pred_2 = np.argmax(yy_pred_P_2, axis=1)
@@ -438,30 +365,84 @@ def compare_sets_performance(
     plt.figure(figsize=(10, 5))
     plt.bar(class_names, f1_2 - f1_1, color=colors)
     plt.axhline(0, color='gray', linestyle='--', linewidth=1)
-    plt.ylabel(f"Δ F1-score ({name_2} - {name_1})")
-    plt.title(f"F1 Gap: {name_2} - {name_1}")
+    plt.ylabel(f"Δ F1-score")
+    plt.title(f"{name_2} - {name_1}")
     plt.xticks(rotation=15, ha='right')
+    plt.ylim(y_min_Delta_F1, y_max_Delta_F1)
     plt.tight_layout()
     plt.show()
 
     # ROC Curves
-    plot_multiclass_roc(
-        yy_true_1, yy_pred_P_1,
-        yy_true_2, yy_pred_P_2,
-        class_names=class_names,
-        name_1=name_1,
-        name_2=name_2
-    )
+    if plot_ROC_curves:
+        plot_combined_multiclass_roc_and_diff(
+            yy_true_1, yy_pred_P_1, yy_true_2, yy_pred_P_2,
+            class_names=class_names, name_1=name_1, name_2=name_2
+        )
+    
+    return metrics, f1_1, f1_2
 
-    plot_multiclass_roc_diff_tpr(
-        yy_true_1, yy_pred_P_1,
-        yy_true_2, yy_pred_P_2,
-        class_names=class_names,
-        name_1=name_1,
-        name_2=name_2
-    )
+def safe_interp(fpr, tpr, x_new):
+    fpr_unique, idx = np.unique(fpr, return_index=True)
+    tpr_unique = tpr[idx]
+    interpolator = interp1d(fpr_unique, tpr_unique, kind='linear', bounds_error=False, fill_value='extrapolate')
+    y_new = interpolator(x_new)
+    return np.nan_to_num(y_new, nan=0.0, posinf=0.0, neginf=0.0)
 
-    return metrics
+def plot_combined_multiclass_roc_and_diff(y_true_1, y_pred_P_1, y_true_2, y_pred_P_2,
+                                          class_names=None, name_1="Model 1", name_2="Model 2"):
+    """
+    Plot multiclass ROC curves (top) and TPR difference (bottom) between two prediction sets.
+    """
+
+    classes = np.unique(np.concatenate([y_true_1, y_true_2]))
+    y_true_1_bin = label_binarize(y_true_1, classes=classes)
+    y_true_2_bin = label_binarize(y_true_2, classes=classes)
+    colors = get_N_colors(len(classes), plt.cm.tab10)
+
+    # Prepare figure layout
+    fig = plt.figure(figsize=(10, 8))
+    gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.05)
+    ax_main = fig.add_subplot(gs[0])
+    ax_diff = fig.add_subplot(gs[1], sharex=ax_main)
+
+    fpr_common = np.linspace(0, 1, 200)
+
+    for i, cls in enumerate(classes):
+        # ROC curves
+        fpr1, tpr1, _ = roc_curve(y_true_1_bin[:, i], y_pred_P_1[:, i])
+        fpr2, tpr2, _ = roc_curve(y_true_2_bin[:, i], y_pred_P_2[:, i])
+        auc1 = auc(fpr1, tpr1)
+        auc2 = auc(fpr2, tpr2)
+
+        label = f"Class {cls}" if class_names is None else class_names[i]
+        ax_main.plot(fpr1, tpr1, linestyle='-', color=colors[i], label=f"{label} ({name_1}) [AUC={auc1:.2f}]")
+        ax_main.plot(fpr2, tpr2, linestyle='--', color=colors[i], label=f"{label} ({name_2}) [AUC={auc2:.2f}]")
+
+        # TPR differences (ΔTPR)
+        interp_tpr1 = safe_interp(fpr1, tpr1, fpr_common)
+        interp_tpr2 = safe_interp(fpr2, tpr2, fpr_common)
+        delta_tpr = interp_tpr2 - interp_tpr1
+        ax_diff.plot(fpr_common, delta_tpr, color=colors[i], lw=2, label=label)
+
+    # Format top panel (ROC curves)
+    ax_main.plot([0, 1], [0, 1], 'k--', lw=1)
+    ax_main.set_xlim([0.0, 1.0])
+    ax_main.set_ylim([0.0, 1.05])
+    ax_main.set_ylabel("True Positive Rate", fontsize=13)
+    ax_main.set_title("Multiclass ROC Curves", fontsize=15)
+    ax_main.legend(fontsize=9, loc="lower right")
+    ax_main.grid(True, linestyle='--', alpha=0.4)
+    ax_main.tick_params(axis='x', labelbottom=False)
+
+    # Format bottom panel (TPR difference)
+    ax_diff.axhline(0, color="black", linestyle="--", lw=1)
+    ax_diff.set_xlabel("False Positive Rate (FPR)", fontsize=13)
+    ax_diff.set_ylabel(f"ΔTPR ({name_2} - {name_1})", fontsize=11)
+    ax_diff.grid(True, linestyle='--', alpha=0.4)
+    ax_diff.set_yscale("symlog", linthresh=1e-2)
+
+    plt.tight_layout()
+    plt.show()
 
 def plot_tsne_comparison_single_pair(
     X_set1, y_set1,

@@ -42,7 +42,7 @@ training:
   sampling_strategy: true_random
   freeze_downstream_model: True
   
-  NN_epochs: 400
+  NN_epochs: 1024
   NN_batches_per_epoch: 128
   batch_size: 512
   batch_size_val: null

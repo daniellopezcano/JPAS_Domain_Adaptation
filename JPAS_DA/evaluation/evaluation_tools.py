@@ -2,6 +2,7 @@ import numpy as np
 import logging
 import torch
 
+from copy import deepcopy
 import os
 import sys
 
@@ -18,6 +19,11 @@ from scipy.ndimage import gaussian_filter
 from sklearn.metrics import roc_curve
 from scipy.interpolate import interp1d
 
+from JPAS_DA import global_setup
+from JPAS_DA.data import loading_tools, cleaning_tools, crossmatch_tools, process_dset_splits
+from JPAS_DA.models import model_building_tools
+from JPAS_DA.training import save_load_tools
+from JPAS_DA.wrapper_wandb import wrapper_tools
 from JPAS_DA.utils.plotting_utils import get_N_colors
 
 def assert_array_lists_equal(list1, list2, rtol=1e-5, atol=1e-8) -> bool:
@@ -328,14 +334,31 @@ def compare_sets_performance(
     f1_1 = f1_score(yy_true_1, yy_pred_1, average=None, zero_division=0)
     f1_2 = f1_score(yy_true_2, yy_pred_2, average=None, zero_division=0)
 
+    is_multiclass = yy_pred_P_1.ndim == 2 and yy_pred_P_1.shape[1] > 2
+
     metrics = {
         "Accuracy": (accuracy_score(yy_true_1, yy_pred_1), accuracy_score(yy_true_2, yy_pred_2), True),
         "Macro F1": (np.mean(f1_1), np.mean(f1_2), True),
         "Macro TPR": (np.mean(tpr_1), np.mean(tpr_2), True),
         "Macro Precision": (precision_score(yy_true_1, yy_pred_1, average='macro', zero_division=0),
                             precision_score(yy_true_2, yy_pred_2, average='macro', zero_division=0), True),
-        "Macro AUROC": (roc_auc_score(yy_true_1, yy_pred_P_1, multi_class='ovo', average='macro') if len(np.unique(yy_true_1)) > 1 else np.nan,
-                        roc_auc_score(yy_true_2, yy_pred_P_2, multi_class='ovo', average='macro') if len(np.unique(yy_true_2)) > 1 else np.nan, True),
+        "Macro AUROC": (
+            roc_auc_score(
+                yy_true_1,
+                yy_pred_P_1 if is_multiclass else yy_pred_P_1[:, 1],
+                average='macro' if is_multiclass else None,
+                multi_class='ovo' if is_multiclass else 'raise'
+            ) if len(np.unique(yy_true_1)) > 1 else np.nan,
+
+            roc_auc_score(
+                yy_true_2,
+                yy_pred_P_2 if is_multiclass else yy_pred_P_2[:, 1],
+                average='macro' if is_multiclass else None,
+                multi_class='ovo' if is_multiclass else 'raise'
+            ) if len(np.unique(yy_true_2)) > 1 else np.nan,
+
+            True
+        ),
         "Expected Calibration Error": (compute_ece(yy_true_1, yy_pred_P_1), compute_ece(yy_true_2, yy_pred_P_2), False),
         "Brier Score": (
             multiclass_brier_score(yy_true_1, yy_pred_P_1),
@@ -391,50 +414,68 @@ def safe_interp(fpr, tpr, x_new):
 def plot_combined_multiclass_roc_and_diff(y_true_1, y_pred_P_1, y_true_2, y_pred_P_2,
                                           class_names=None, name_1="Model 1", name_2="Model 2"):
     """
-    Plot multiclass ROC curves (top) and TPR difference (bottom) between two prediction sets.
+    Plot multiclass or binary ROC curves (top) and TPR difference (bottom).
     """
 
     classes = np.unique(np.concatenate([y_true_1, y_true_2]))
-    y_true_1_bin = label_binarize(y_true_1, classes=classes)
-    y_true_2_bin = label_binarize(y_true_2, classes=classes)
-    colors = get_N_colors(len(classes), plt.cm.tab10)
+    num_classes = len(classes)
+    colors = get_N_colors(num_classes, plt.cm.tab10)
+    fpr_common = np.linspace(0, 1, 200)
 
-    # Prepare figure layout
     fig = plt.figure(figsize=(10, 8))
     gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.05)
     ax_main = fig.add_subplot(gs[0])
     ax_diff = fig.add_subplot(gs[1], sharex=ax_main)
 
-    fpr_common = np.linspace(0, 1, 200)
+    if num_classes == 2:
+        # Binary classification: use positive class (assume class 1)
+        if y_pred_P_1.ndim == 2:
+            y_pred_1 = y_pred_P_1[:, 1]
+            y_pred_2 = y_pred_P_2[:, 1]
+        else:
+            y_pred_1 = y_pred_P_1
+            y_pred_2 = y_pred_P_2
 
-    for i, cls in enumerate(classes):
-        # ROC curves
-        fpr1, tpr1, _ = roc_curve(y_true_1_bin[:, i], y_pred_P_1[:, i])
-        fpr2, tpr2, _ = roc_curve(y_true_2_bin[:, i], y_pred_P_2[:, i])
+        fpr1, tpr1, _ = roc_curve(y_true_1, y_pred_1)
+        fpr2, tpr2, _ = roc_curve(y_true_2, y_pred_2)
         auc1 = auc(fpr1, tpr1)
         auc2 = auc(fpr2, tpr2)
 
-        label = f"Class {cls}" if class_names is None else class_names[i]
-        ax_main.plot(fpr1, tpr1, linestyle='-', color=colors[i], label=f"{label} ({name_1}) [AUC={auc1:.2f}]")
-        ax_main.plot(fpr2, tpr2, linestyle='--', color=colors[i], label=f"{label} ({name_2}) [AUC={auc2:.2f}]")
+        label = class_names[1] if class_names else "Positive class"
+        ax_main.plot(fpr1, tpr1, '-', color=colors[1], label=f"{label} ({name_1}) [AUC={auc1:.2f}]")
+        ax_main.plot(fpr2, tpr2, '--', color=colors[1], label=f"{label} ({name_2}) [AUC={auc2:.2f}]")
 
-        # TPR differences (ΔTPR)
-        interp_tpr1 = safe_interp(fpr1, tpr1, fpr_common)
-        interp_tpr2 = safe_interp(fpr2, tpr2, fpr_common)
-        delta_tpr = interp_tpr2 - interp_tpr1
-        ax_diff.plot(fpr_common, delta_tpr, color=colors[i], lw=2, label=label)
+        delta_tpr = safe_interp(fpr2, tpr2, fpr_common) - safe_interp(fpr1, tpr1, fpr_common)
+        ax_diff.plot(fpr_common, delta_tpr, color=colors[1], lw=2, label=label)
 
-    # Format top panel (ROC curves)
+    else:
+        # Multiclass
+        y_true_1_bin = label_binarize(y_true_1, classes=classes)
+        y_true_2_bin = label_binarize(y_true_2, classes=classes)
+
+        for i, cls in enumerate(classes):
+            fpr1, tpr1, _ = roc_curve(y_true_1_bin[:, i], y_pred_P_1[:, i])
+            fpr2, tpr2, _ = roc_curve(y_true_2_bin[:, i], y_pred_P_2[:, i])
+            auc1 = auc(fpr1, tpr1)
+            auc2 = auc(fpr2, tpr2)
+
+            label = f"Class {cls}" if class_names is None else class_names[i]
+            ax_main.plot(fpr1, tpr1, '-', color=colors[i], label=f"{label} ({name_1}) [AUC={auc1:.2f}]")
+            ax_main.plot(fpr2, tpr2, '--', color=colors[i], label=f"{label} ({name_2}) [AUC={auc2:.2f}]")
+
+            delta_tpr = safe_interp(fpr2, tpr2, fpr_common) - safe_interp(fpr1, tpr1, fpr_common)
+            ax_diff.plot(fpr_common, delta_tpr, color=colors[i], lw=2, label=label)
+
+    # Final formatting
     ax_main.plot([0, 1], [0, 1], 'k--', lw=1)
     ax_main.set_xlim([0.0, 1.0])
     ax_main.set_ylim([0.0, 1.05])
     ax_main.set_ylabel("True Positive Rate", fontsize=13)
-    ax_main.set_title("Multiclass ROC Curves", fontsize=15)
+    ax_main.set_title("ROC Curves", fontsize=15)
     ax_main.legend(fontsize=9, loc="lower right")
     ax_main.grid(True, linestyle='--', alpha=0.4)
     ax_main.tick_params(axis='x', labelbottom=False)
 
-    # Format bottom panel (TPR difference)
     ax_diff.axhline(0, color="black", linestyle="--", lw=1)
     ax_diff.set_xlabel("False Positive Rate (FPR)", fontsize=13)
     ax_diff.set_ylabel(f"ΔTPR ({name_2} - {name_1})", fontsize=11)
@@ -545,3 +586,249 @@ def plot_tsne_comparison_single_pair(
     plt.tight_layout()
     plt.show()
 
+def safe_compare(a, b, path="root"):
+    """Recursively compare two structures with detailed debug logs and NumPy-safe checks."""
+    
+    if isinstance(a, dict) and isinstance(b, dict):
+        logging.debug(f"🔍 Comparing dicts at {path}")
+        keys_a = set(a.keys())
+        keys_b = set(b.keys())
+
+        for key in keys_a.union(keys_b):
+            if key not in a:
+                logging.debug(f"❌ Key '{key}' missing in first config at {path}")
+                return False
+            if key not in b:
+                logging.debug(f"❌ Key '{key}' missing in second config at {path}")
+                return False
+            if not safe_compare(a[key], b[key], f"{path}['{key}']"):
+                return False
+        return True
+
+    elif isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        logging.debug(f"🔍 Comparing {'list' if isinstance(a, list) else 'tuple'} at {path}")
+        if len(a) != len(b):
+            logging.debug(f"❌ Length mismatch at {path}: {len(a)} ≠ {len(b)}")
+            return False
+        for i, (item_a, item_b) in enumerate(zip(a, b)):
+            if not safe_compare(item_a, item_b, f"{path}[{i}]"):
+                return False
+        return True
+
+    elif isinstance(a, np.ndarray) and isinstance(b, np.ndarray):
+        logging.debug(f"🔍 Comparing NumPy arrays at {path} with shape {a.shape} and {b.shape}")
+        if not np.array_equal(a, b):
+            logging.debug(f"❌ Array mismatch at {path}")
+            return False
+        return True
+
+    else:
+        logging.debug(f"🔍 Comparing values at {path}: {a} vs {b}")
+        if a != b:
+            logging.debug(f"❌ Value mismatch at {path}: {a} ≠ {b}")
+            return False
+        return True
+
+
+def evaluate_results_from_load_paths(
+    paths_load,
+    return_keys=['val_DESI_only', 'test_JPAS_matched'],
+    define_dataset_loaders_keys=['DESI_only', 'JPAS_matched'],
+    keys_yy=["SPECTYPE_int", "TARGETID", "DESI_FLUX_R"]
+):
+
+    # ─────────────────────────────────────────────────────────────
+    # Load and validate data config across all paths
+    # ─────────────────────────────────────────────────────────────
+    logging.info("🔍 Validating model configs...")
+    configs = []
+    for path in paths_load:
+        _, config = wrapper_tools.load_and_massage_config_file(
+            os.path.join(path, "config.yaml"), path
+        )
+        configs.append(config)
+
+    config_ref = configs[0]
+    for i, cfg in enumerate(configs[1:], 1):
+        logging.debug(f"🔍 Comparing config 0 and config {i}")
+        if not safe_compare(cfg['data'], config_ref['data']):
+            raise ValueError(f"🚫 Data config mismatch between model 0 and model {i}")
+
+    config_data = config_ref["data"]
+    keys_xx = config_data["features_labels_options"]["keys_xx"]
+
+    # Extract paths and options
+    path_save = config_ref['training']['path_save']
+    means, stds = save_load_tools.load_means_stds(path_save)
+
+    data_paths = config_data["data_paths"]
+    root_path = data_paths["root_path"]
+    load_JPAS_data = data_paths["load_JPAS_data"]
+    load_DESI_data = data_paths["load_DESI_data"]
+    random_seed_load = data_paths["random_seed_load"]
+
+    clean_opts = config_data["dict_clean_data_options"]
+    split_opts = config_data["dict_split_data_options"]
+
+    # ─────────────────────────────────────────────────────────────
+    # Load and preprocess shared data
+    # ─────────────────────────────────────────────────────────────
+    logging.info("\n\n1️⃣: Loading datasets from disk...")
+    DATA = loading_tools.load_dsets(root_path, load_JPAS_data, load_DESI_data, random_seed_load)
+
+    logging.info("\n\n2️⃣: Cleaning and masking data...")
+    DATA = cleaning_tools.clean_and_mask_data(DATA=DATA, **clean_opts)
+
+    logging.info("\n\n3️⃣: Crossmatching JPAS and DESI TARGETIDs...")
+    Dict_LoA = {"both": {}, "only": {}}
+    _, _, _, Dict_LoA["only"]["DESI"], Dict_LoA["only"]["JPAS"], Dict_LoA["both"]["DESI"], Dict_LoA["both"]["JPAS"] = \
+        crossmatch_tools.crossmatch_IDs_two_datasets(DATA["DESI"]["TARGETID"], DATA["JPAS"]["TARGETID"])
+
+    logging.info("\n\n4️⃣: Splitting data into train/val/test...")
+    Dict_LoA_split = {"both": {}, "only": {}}
+
+    # Always split 'both' JPAS and DESI (assumed always needed)
+    Dict_LoA_split["both"]["JPAS"] = process_dset_splits.split_LoA(
+        Dict_LoA["both"]["JPAS"],
+        split_opts["train_ratio_both"], split_opts["val_ratio_both"], split_opts["test_ratio_both"],
+        seed=split_opts["random_seed_split_both"]
+    )
+    Dict_LoA_split["both"]["DESI"] = process_dset_splits.split_LoA(
+        Dict_LoA["both"]["DESI"],
+        split_opts["train_ratio_both"], split_opts["val_ratio_both"], split_opts["test_ratio_both"],
+        seed=split_opts["random_seed_split_both"]
+    )
+    # Split 'only' DESI if available
+    if "DESI" in Dict_LoA["only"]:
+        Dict_LoA_split["only"]["DESI"] = process_dset_splits.split_LoA(
+            Dict_LoA["only"]["DESI"],
+            split_opts["train_ratio_only_DESI"], split_opts["val_ratio_only_DESI"], split_opts["test_ratio_only_DESI"],
+            seed=split_opts["random_seed_split_only_DESI"]
+        )
+    # Optionally split 'only' JPAS if available
+    if "JPAS" in Dict_LoA["only"]:
+        Dict_LoA_split["only"]["JPAS"] = process_dset_splits.split_LoA(
+            Dict_LoA["only"]["JPAS"],
+            split_opts.get("train_ratio_only_JPAS", 0.7),
+            split_opts.get("val_ratio_only_JPAS", 0.15),
+            split_opts.get("test_ratio_only_JPAS", 0.15),
+            seed=split_opts.get("random_seed_split_only_JPAS", 42)
+        )
+    
+    logging.info("\n\n5️⃣: Load and normalize data...")
+    xx_dict, yy_dict = {}, {}
+
+    for split in ["val", "test"]:
+        xx_dict[split] = {}
+        yy_dict[split] = {}
+
+        for loader in define_dataset_loaders_keys:
+            assert isinstance(loader, str), f"❌ Loader key is not a string: {loader}"
+            source = "DESI" if "DESI" in loader else "JPAS"
+            split_type = "both" if "matched" in loader or "combined" in loader else "only"
+
+            if split_type not in Dict_LoA_split or source not in Dict_LoA_split[split_type]:
+                logging.warning(f"⚠️ Skipping loader '{loader}' because '{source}' not found in split type '{split_type}'")
+                continue
+
+            subset = Dict_LoA_split[split_type][source].get(split, [])
+            if not subset:
+                logging.warning(f"⚠️ No entries found for split '{split}' in loader '{loader}'")
+                continue
+
+            LoA, xx, yy = process_dset_splits.extract_data_using_LoA(subset, DATA[source], keys_xx, keys_yy)
+
+            stacked_features = []
+            for i, k in enumerate(xx):
+                arr = np.asarray(xx[k])
+                if arr.size == 0:
+                    continue
+                normed = (arr - means[i]) / stds[i]
+                stacked_features.append(np.atleast_2d(normed).reshape(arr.shape[0], -1))
+
+            if stacked_features:
+                xx_stacked = np.concatenate(stacked_features, axis=1)
+            else:
+                logging.warning(f"⚠️ Feature stack is empty for split={split}, loader={loader}. Creating dummy array.")
+                xx_stacked = np.empty((0, sum([np.prod(np.shape(xx[k])[1:]) for k in keys_xx])))
+
+            xx_dict[split][str(loader)] = torch.tensor(xx_stacked, dtype=torch.float32)
+            yy_dict[split][str(loader)] = yy
+
+    # ─────────────────────────────────────────────────────────────
+    # Evaluate each model and collect results
+    # ─────────────────────────────────────────────────────────────
+    logging.info("\n\n Evaluate each model and collect results...")
+    out = {}
+    for model_idx, path in enumerate(paths_load):
+        _, model_encoder = save_load_tools.load_model_from_checkpoint(
+            os.path.join(path, "model_encoder.pt"), model_building_tools.create_mlp)
+        _, model_downstream = save_load_tools.load_model_from_checkpoint(
+            os.path.join(path, "model_downstream.pt"), model_building_tools.create_mlp)
+
+        out[model_idx] = {}
+        for key in return_keys:
+            split, loader = key.split("_", maxsplit=1)
+            xx_input = xx_dict[split][loader]
+
+            with torch.no_grad():
+                features = model_encoder(xx_input)
+                logits = model_downstream(features)
+                probs = torch.nn.functional.softmax(logits, dim=1).cpu().numpy()
+
+            out[model_idx][key] = {
+                "true": yy_dict[split][loader]["SPECTYPE_int"],
+                "prob": probs,
+                "label": np.argmax(probs, axis=1),
+                "features": features.cpu().numpy(),
+                "xx": xx_input.cpu().numpy(),
+                "TARGETID": yy_dict[split][loader]["TARGETID"],
+                "DESI_FLUX_R": yy_dict[split][loader]["DESI_FLUX_R"]
+            }
+
+    return out
+
+
+def add_magnitude_bins_to_results(
+    out_dict,
+    magnitude_key="DESI_FLUX_R",
+    mag_bin_edges=(17, 19, 21, 22, 22.5),
+    output_key="MAG_BIN_ID"
+):
+    """
+    Adds magnitude bin indices to each dataset entry in the out_dict.
+    The binning is done using the R-band magnitude computed from DESI_FLUX_R.
+
+    Parameters
+    ----------
+    out_dict : dict
+        Dictionary returned by evaluate_results_from_load_paths.
+    magnitude_key : str
+        Key inside each subdict to use for flux (to convert to magnitude).
+    mag_bin_edges : tuple or list
+        Magnitude bin edges (right-exclusive).
+    output_key : str
+        New key to store the bin index (-1 if not assigned).
+    """
+    import numpy as np
+
+    bin_edges = np.array(mag_bin_edges)
+
+    for model_idx in out_dict:
+        for key in out_dict[model_idx]:
+            flux = out_dict[model_idx][key][magnitude_key]
+            # Convert flux to magnitude
+            magnitude = np.full_like(flux, np.nan, dtype=np.float32)
+            valid = flux > 0
+            magnitude[valid] = 22.5 - 2.5 * np.log10(flux[valid])
+
+            # Compute bin indices
+            bin_indices = np.full_like(magnitude, -1, dtype=int)
+            for i in range(len(bin_edges) - 1):
+                in_bin = (magnitude >= bin_edges[i]) & (magnitude < bin_edges[i + 1])
+                bin_indices[in_bin] = i
+
+            # Store bin index in the result dictionary
+            out_dict[model_idx][key][output_key] = bin_indices
+
+    return out_dict

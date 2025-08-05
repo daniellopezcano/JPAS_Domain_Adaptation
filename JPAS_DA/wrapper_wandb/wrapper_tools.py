@@ -122,6 +122,7 @@ def wrapper_data_loaders_from_config(dict_data):
         magnitude_flux_key          = clean_opts['magnitude_flux_key'],
         magnitude_threshold         = clean_opts['magnitude_threshold'],
         z_lim_QSO_cut               = clean_opts['z_lim_QSO_cut'],
+        manually_select_one_SPECTYPE_vs_rest = clean_opts['manually_select_one_SPECTYPE_vs_rest'],
 
         train_ratio_both            = split_opts['train_ratio_both'],
         val_ratio_both              = split_opts['val_ratio_both'],

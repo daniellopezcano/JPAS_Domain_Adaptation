@@ -15,23 +15,16 @@ data:
   dict_clean_data_options: default_global_setup
 
   # ── Train/val/test splits ──
-  dict_split_data_options:
-    train_ratio_both: 0.8
-    val_ratio_both: 0.1
-    test_ratio_both: 0.1
-    random_seed_split_both: 0
-
-    train_ratio_only_DESI: 0.8
-    val_ratio_only_DESI: 0.1
-    test_ratio_only_DESI: 0.1
-    random_seed_split_only_DESI: 0
+  dict_split_data_options: default_global_setup
 
   # ── Input/output keys ──
   features_labels_options:
-    keys_xx: [OBS, ERR, MORPHTYPE_int]
-    keys_yy: [SPECTYPE_int, TARGETID]
+    define_dataset_loaders_keys: [DESI_only]
+    keys_xx: [OBS, MORPHTYPE_int]
+    keys_yy: [SPECTYPE_int]
     normalize: true
-    key_survey_training: DESI_combined # JPAS_matched, DESI_matched, DESI_combined
+    normalization_source_key: DESI_only
+    key_survey_training: DESI_only
 
 # ════════════════════════════════════════════════════════════════════
 # Model Architecture
@@ -49,16 +42,16 @@ training:
   sampling_strategy: true_random
   freeze_downstream_model: false
   
-  NN_epochs: 400
-  NN_batches_per_epoch: 8192
-  batch_size: 2048
+  NN_epochs: 2048
+  # NN_batches_per_epoch: 8192
+  # batch_size: 5000
   batch_size_val: null
 
-  lr: 0.01
-  weight_decay: 0.0001
-  clip_grad_norm: 100.0
+  # lr: 0.01
+  # weight_decay: 0.0001
+  # clip_grad_norm: 100.0
 
-  seed_mode: deterministic
+  seed_mode: random
   seed: 0
 
   device: cuda
@@ -68,18 +61,6 @@ training:
 # ════════════════════════════════════════════════════════════════
 
 encoders:
-  # Minimal capacity
-  - hidden_layers: [64]
-    dropout_rates: [0.0]
-
-  # Slightly larger single-layer
-  - hidden_layers: [128]
-    dropout_rates: [0.1]
-
-  # Two moderate layers
-  - hidden_layers: [256, 128]
-    dropout_rates: [0.1, 0.1]
-
   # Three-layer encoder with light dropout
   - hidden_layers: [256, 128, 64]
     dropout_rates: [0.1, 0.1, 0.1]

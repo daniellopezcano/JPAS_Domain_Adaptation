@@ -3,7 +3,7 @@
 # ════════════════════════════════════════════════════════════════
 
 method: random                     # Sweep search strategy
-name: "JPAS_DA"      # Name of the sweep
+name: "wandb_DA_my_sweep_0"      # Name of the sweep
 
 # ════════════════════════════════════════════════════════════════
 # Parameters to sweep over
@@ -35,6 +35,6 @@ parameters:
     max: 0.01
 
   clip_grad_norm:
-    distribution: uniform
-    min: 0.1
-    max: 100.0
+    distribution: log_uniform_values
+    min: 0.05
+    max: 500.0

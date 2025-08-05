@@ -318,7 +318,9 @@ def encode_strings_to_integers(
 
 def clean_and_mask_data(
         DATA, apply_masks=['unreliable', "jpas_ignasi_dense", 'apply_additional_filters', 'magic_numbers', 'negative_errors', 'nan_values'],
-        mask_indices=[0, -2], magic_numbers=[99, -99], i_band_sn_threshold=20, magnitude_flux_key=None, magnitude_threshold=None, z_lim_QSO_cut=None
+        mask_indices=[0, -2], magic_numbers=[99, -99],
+        i_band_sn_threshold=20, magnitude_flux_key=None, magnitude_threshold=None, z_lim_QSO_cut=None,
+        manually_select_one_SPECTYPE_vs_rest = None
     ):
     """
     Main function to clean and mask observational and simulated datasets.
@@ -414,6 +416,14 @@ def clean_and_mask_data(
                         DATA_pd[survey]['SPECTYPE'][ii] = "QSO_low"
                     else:
                         DATA_pd[survey]['SPECTYPE'][ii] = "QSO_high"
+
+    # (optional): if manually_select_one_SPECTYPE_vs_rest is specified, restrict the surveys SPECTYPE to that class
+    if manually_select_one_SPECTYPE_vs_rest != None:
+        logging.info("├── Restricting the surveys SPECTYPE to " + str(manually_select_one_SPECTYPE_vs_rest))
+        for survey in list(DATA_pd.keys()):
+            for ii in range(len(DATA_pd[survey]['SPECTYPE'])):
+                if DATA_pd[survey]['SPECTYPE'][ii] != manually_select_one_SPECTYPE_vs_rest:
+                    DATA_pd[survey]['SPECTYPE'][ii] = "no_" + manually_select_one_SPECTYPE_vs_rest
 
     # Step 7: Encode strings to integers (SPECTYPE and MORPHTYPE)
     all_specs = list(DATA_pd["DESI"]['SPECTYPE']) + list(DATA_pd["JPAS"]['SPECTYPE'])

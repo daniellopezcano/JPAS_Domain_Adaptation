@@ -19,6 +19,7 @@ def wrapper_data_loaders(
     magnitude_flux_key: Optional[str],
     magnitude_threshold: Optional[float],
     z_lim_QSO_cut: float,
+    manually_select_one_SPECTYPE_vs_rest: Optional[str],
     train_ratio_both: float,
     val_ratio_both: float,
     test_ratio_both: float,
@@ -69,6 +70,8 @@ def wrapper_data_loaders(
         Upper magnitude limit to keep samples.
     z_lim_QSO_cut : float
         Upper redshift limit for QSO cut in cleaning.
+    manually_select_one_SPECTYPE_vs_rest : str, optional
+        Manually select one SPECTYPE vs the rest.
     train_ratio_both / val_ratio_both / test_ratio_both : float
         Splitting ratios for sources matched in both JPAS and DESI.
     random_seed_split_both : int
@@ -125,7 +128,8 @@ def wrapper_data_loaders(
         i_band_sn_threshold=i_band_sn_threshold,
         magnitude_flux_key=magnitude_flux_key,
         magnitude_threshold=magnitude_threshold,
-        z_lim_QSO_cut=z_lim_QSO_cut
+        z_lim_QSO_cut=z_lim_QSO_cut,
+        manually_select_one_SPECTYPE_vs_rest=manually_select_one_SPECTYPE_vs_rest
     )
 
     # ───────────────────────────────────────────────────── #

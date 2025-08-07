@@ -30,7 +30,7 @@ data:
 # Model Architecture
 # ════════════════════════════════════════════════════════════════════
 models:
-  path_load: wandb_no_DA/my-sweep-0
+  path_load: wandb_no_DA/lemon-sweep-0
 
 # ════════════════════════════════════════════════════════════════════
 # Training Configuration
@@ -51,7 +51,7 @@ training:
   # weight_decay: 0.0001
   # clip_grad_norm: 100.0
 
-  seed_mode: random
-  seed: 0
+  seed_mode: deterministic
+  # seed: 0
 
   device: cuda

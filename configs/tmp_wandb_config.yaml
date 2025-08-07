@@ -17,7 +17,7 @@ data:
     normalization_source_key: DESI_only
     key_survey_training: JPAS_matched
 models:
-  path_load: wandb_no_DA/my-sweep-0
+  path_load: wandb_no_DA/lemon-sweep-0
 training:
   path_save: default_global_setup
   default_overwrite: false
@@ -25,11 +25,11 @@ training:
   freeze_downstream_model: true
   NN_epochs: 2048
   batch_size_val: null
-  seed_mode: random
-  seed: 0
+  seed_mode: deterministic
   device: cuda
-  NN_batches_per_epoch: 7697
-  batch_size: 2824
-  lr: 0.004152473462951255
-  weight_decay: 0.00019284557411030904
-  clip_grad_norm: 14.229504250977763
+  NN_batches_per_epoch: 6973
+  batch_size: 4588
+  lr: 0.000999270953943512
+  weight_decay: 0.0013037066406591487
+  clip_grad_norm: 2.44725815643257
+  seed: 726

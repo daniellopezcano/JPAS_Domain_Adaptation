@@ -51,9 +51,9 @@ dict_clean_data_options = {
 
 dict_split_data_options = {
     # Splitting ratios for matched (both) datasets
-    "train_ratio_both"            : 0.3,
-    "val_ratio_both"              : 0.1,
-    "test_ratio_both"             : 0.6,
+    "train_ratio_both"            : 0.4,
+    "val_ratio_both"              : 0.2,
+    "test_ratio_both"             : 0.4,
     "random_seed_split_both"      : default_seed,
     # Splitting ratios for DESI-only dataset
     "train_ratio_only_DESI"       : 0.70,

@@ -35,7 +35,12 @@ def wandb_sweep(path_wandb_config, wandb_project_name, N_samples_hyperparameters
 
 
 def make_wandb_train(wandb_project_name):
-    def wandb_train(config=None):
+    def wandb_train(
+            config=None,
+            sweep_keys = [
+                "NN_epochs", "NN_batches_per_epoch", "batch_size", "batch_size_val", "lr", "weight_decay", "clip_grad_norm", "seed"
+            ]
+        ):
         """
         Train a model using Weights & Biases (wandb) experiment tracking.
 
@@ -86,11 +91,6 @@ def make_wandb_train(wandb_project_name):
                 merged_config["models"]["encoder"] = encoder_cfg
                 merged_config["models"]["downstream"] = downstream_cfg
 
-            # Inject sweep-controlled training hyperparameters
-            sweep_keys = [
-                "NN_epochs", "NN_batches_per_epoch", "batch_size", "batch_size_val",
-                "lr", "weight_decay", "clip_grad_norm"
-            ]
             for key in sweep_keys:
                 if key in config:
                     merged_config["training"][key] = getattr(config, key)

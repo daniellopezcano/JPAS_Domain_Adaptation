@@ -12,7 +12,15 @@ data:
   data_paths: default_global_setup
 
   # ── clean_data_options ──
-  dict_clean_data_options: default_global_setup
+  dict_clean_data_options:
+    apply_masks         : [unreliable, jpas_ignasi_dense, magic_numbers, negative_errors, nan_values, apply_additional_filters]
+    mask_indices        : [0, -2]
+    magic_numbers       : [-99, 99]
+    i_band_sn_threshold : 0
+    magnitude_flux_key  : DESI_FLUX_R
+    magnitude_threshold : 22.5
+    z_lim_QSO_cut       : 2.1
+    manually_select_one_SPECTYPE_vs_rest : QSO_high
 
   # ── Train/val/test splits ──
   dict_split_data_options: default_global_setup
@@ -30,7 +38,7 @@ data:
 # Model Architecture
 # ════════════════════════════════════════════════════════════════════
 models:
-  path_load: wandb_no_DA/my-sweep-0
+  path_load: 09_no_DA_QSO_high
 
 # ════════════════════════════════════════════════════════════════════
 # Training Configuration
@@ -42,16 +50,16 @@ training:
   sampling_strategy: true_random
   freeze_downstream_model: True
   
-  NN_epochs: 1024
-  NN_batches_per_epoch: 4096
-  batch_size: 4096
+  NN_epochs: 256
+  NN_batches_per_epoch: 128
+  batch_size: 512
   batch_size_val: null
 
-  lr: 0.0002
+  lr: 0.0001
   weight_decay: 0.0001
-  clip_grad_norm: 10.0
+  clip_grad_norm: 100.0
 
   seed_mode: deterministic
-  seed: 140
+  seed: 0
 
   device: cuda

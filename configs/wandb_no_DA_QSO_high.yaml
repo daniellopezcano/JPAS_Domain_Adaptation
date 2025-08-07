@@ -3,7 +3,7 @@
 # ════════════════════════════════════════════════════════════════
 
 method: random                     # Sweep search strategy
-name: "wandb_no_DA"                      # Name of the sweep
+name: "wandb_no_DA_QSO_high"                      # Name of the sweep
 
 # ════════════════════════════════════════════════════════════════
 # Parameters to sweep over
@@ -11,7 +11,7 @@ name: "wandb_no_DA"                      # Name of the sweep
 parameters:
 
   aux_config_path:
-    value: aux_wandb_no_DA.yaml
+    value: aux_wandb_no_DA_QSO_high.yaml
 
   # ── Architecture Outputs ──
   output_dim:
@@ -52,7 +52,7 @@ parameters:
 
   # ── Architecture Selector Indices ──
   encoder_id:
-    values: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
   downstream_id:
     values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]

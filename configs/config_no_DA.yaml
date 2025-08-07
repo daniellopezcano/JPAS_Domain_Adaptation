@@ -33,13 +33,13 @@ models:
   path_load: null
 
   encoder:
-    hidden_layers: [64, 64, 32, 16]
-    dropout_rates: [0.02, 0.02, 0.02, 0.02]
-    output_dim: 8
+    hidden_layers: [256, 128, 96]
+    dropout_rates: [0.002, 0.002, 0.002]
+    output_dim: 18
 
   downstream:
-    hidden_layers: [32, 32]
-    dropout_rates: [0.02, 0.02]
+    hidden_layers: [128, 96]
+    dropout_rates: [0.002, 0.002]
 
 # ════════════════════════════════════════════════════════════════════
 # Training Configuration
@@ -52,15 +52,15 @@ training:
   freeze_downstream_model: false
   
   NN_epochs: 2048
-  NN_batches_per_epoch: 8192
-  batch_size: 5000
+  NN_batches_per_epoch: 4096
+  batch_size: 24000
   batch_size_val: null
 
-  lr: 0.01
-  weight_decay: 0.0001
-  clip_grad_norm: 100.0
+  lr: 0.008
+  weight_decay: 0.00000001
+  clip_grad_norm: 0.1
 
   seed_mode: deterministic
-  seed: 0
+  seed: 42
 
   device: cuda

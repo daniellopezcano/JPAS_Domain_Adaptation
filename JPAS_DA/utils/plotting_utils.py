@@ -7,9 +7,12 @@ import logging
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
+from matplotlib.lines import Line2D
 
 import scipy.stats as sp
 import scipy.interpolate as interp
+
+from sklearn.metrics import f1_score
 
 def matplotlib_default_config():
 
@@ -581,72 +584,133 @@ def plot_histogram_with_ranges(magnitudes, ranges=None, colors=None, bins=200, x
     # Return the dictionary of masks
     return masks_dict
 
-def plot_histogram_with_ranges_multiple(mag_dict, ranges, colors, bins=200, x_label='DESI Magnitude (R)', title='Histogram of DESI R Magnitudes (by split and loader)'):
+def plot_histogram_with_ranges_multiple(
+    mag_dict,
+    ranges,
+    colors,
+    bins=200,
+    x_label='DESI Magnitude (R)',
+    title='Histogram of DESI R Magnitudes (by split and loader)',
+    labels_dict=None,               
+    class_names=None,               
+    pct_decimals=1,                 
+    annotate_mode='text',
+    legend_fontsize=10              
+):
     """
-    Plot multiple histograms of magnitudes with color-coded background bands and annotate object counts.
-
-    Parameters:
-    mag_dict (dict): Dictionary with keys as (key_dset, key_loader) and values as 1D magnitude arrays.
-    ranges (list of tuple): List of magnitude (min, max) ranges.
-    colors (list of str): Background colors for each range.
-    bins (int): Histogram bins.
-    x_label (str): X-axis label.
-    title (str): Plot title.
+    Plot multiple histograms of magnitudes with color-coded background bands and annotate
+    object counts and, if provided, class percentages per magnitude band.
 
     Returns:
-    dict: Nested dict with masks per range for each (key_dset, key_loader).
+        masks_all: dict[(key_dset,key_loader)][(lower,upper)] -> boolean mask on filtered magnitudes
+        stats_all: dict[(key_dset,key_loader)][(lower,upper)] with:
+                   'N', 'per_class_counts', 'per_class_pct', 'class_labels'
     """
     fig, ax = plt.subplots(figsize=(10, 6))
     masks_all = {}
+    stats_all = {}
 
     # Background colored regions for magnitude ranges
     for (lower, upper), color in zip(ranges, colors):
-        ax.axvspan(lower, upper, color=color, alpha=0.5)
+        ax.axvspan(lower, upper, color=color, alpha=0.35)
 
-    # Plot histograms for each split/loader combo
-    for (key_dset, key_loader), magnitudes in mag_dict.items():
+    # Prepare class naming
+    if labels_dict is not None:
+        all_labels = np.concatenate(
+            [np.asarray(labels_dict[k]).ravel() for k in mag_dict.keys() if k in labels_dict]
+        )
+        unique_classes = np.unique(all_labels)
+        n_classes = unique_classes.size
+        if class_names is None:
+            class_names = [f"c{int(c)}" for c in unique_classes]
+        else:
+            n_classes = len(class_names)
+    else:
+        unique_classes = None
+        n_classes = 0
+
+    keys_list = list(mag_dict.keys())
+    for idx, (key_dset, key_loader) in enumerate(keys_list):
+        magnitudes = np.asarray(mag_dict[(key_dset, key_loader)]).ravel()
         valid = np.isfinite(magnitudes)
         magnitudes = magnitudes[valid]
-        label = f"{key_dset} | {key_loader}"
-        color_index = list(mag_dict.keys()).index((key_dset, key_loader)) % len(colors)
 
-        hist_counts, edges = np.histogram(magnitudes, bins=bins, range=(np.nanmin(magnitudes), np.nanmax(magnitudes)))
-        centers = (edges[:-1] + edges[1:]) / 2
+        labels = None
+        if labels_dict is not None and (key_dset, key_loader) in labels_dict:
+            labels_full = np.asarray(labels_dict[(key_dset, key_loader)]).ravel()
+            if labels_full.shape[0] != valid.shape[0]:
+                raise ValueError(f"labels length mismatch for {key_dset}|{key_loader}")
+            labels = labels_full[valid]
+
+        label_curve = f"{key_dset} | {key_loader}"
+        color_index = idx % len(colors)
+
+        if magnitudes.size == 0:
+            continue
+        x_min, x_max = float(np.nanmin(magnitudes)), float(np.nanmax(magnitudes))
+        hist_counts, edges = np.histogram(magnitudes, bins=bins, range=(x_min, x_max))
+        total = hist_counts.sum()
+        centers = (edges[:-1] + edges[1:]) / 2.0
         line_color = colors[color_index]
-        ax.plot(centers, hist_counts/np.sum(hist_counts), label=label, color=line_color, linewidth=2)
+        if total > 0:
+            ax.plot(centers, hist_counts, label=label_curve, color=line_color, linewidth=2)
+        else:
+            ax.plot(centers, np.zeros_like(centers), label=label_curve, color=line_color, linewidth=2)
 
-        # Store range masks and annotate counts
         masks_all[(key_dset, key_loader)] = {}
+        stats_all[(key_dset, key_loader)] = {}
+
+        ybase = np.mean(hist_counts) if total > 0 else 1.0
         for (lower, upper) in ranges:
             mask = (magnitudes >= lower) & (magnitudes < upper)
-            count = np.sum(mask)
+            N = int(mask.sum())
             masks_all[(key_dset, key_loader)][(lower, upper)] = mask
 
-            # Add annotation
-            x_pos = (lower + upper) / 2
-            y_pos = np.max(hist_counts/np.sum(hist_counts)) * 0.9 - color_index * (np.max(hist_counts/np.sum(hist_counts)) * 0.1)
-            ax.text(
-                x_pos, y_pos,
-                f'{count}',
-                color=line_color,
-                fontsize=10,
-                ha='center',
-                va='center',
-                bbox=dict(facecolor='white', edgecolor=line_color, boxstyle='round,pad=0.3', linewidth=1.5)
-            )
+            per_class_counts = None
+            per_class_pct = None
+            text_lines = [f"N={N}"]
 
-    ax.set_xlabel(x_label, fontsize=14)
-    ax.set_ylabel('Frequency', fontsize=14)
-    ax.set_title(title, fontsize=16)
-    ax.legend(fontsize=10)
-    ax.tick_params(axis='both', which='major', labelsize=12)
-    ax.set_yscale('log')
-    ax.set_ylim(0.008, 0.11)
-    ax.set_xlim(17, 22.5)
+            if labels is not None and N > 0:
+                if unique_classes is not None and not np.array_equal(unique_classes, np.arange(n_classes)):
+                    inv = {lab: i for i, lab in enumerate(unique_classes)}
+                    lab_idx = np.vectorize(inv.get)(labels[mask])
+                else:
+                    lab_idx = labels[mask].astype(int)
+
+                per_class_counts = np.bincount(lab_idx, minlength=n_classes)
+                for i in range(n_classes):
+                    text_lines.append(f"{class_names[i]}: {per_class_counts[i]:.{pct_decimals}f}")
+
+            stats_all[(key_dset, key_loader)][(lower, upper)] = {
+                "N": N,
+                "per_class_counts": per_class_counts,
+                "per_class_pct": per_class_pct,
+                "class_labels": class_names if labels is not None else None,
+            }
+
+            if annotate_mode == 'text':
+                # make the position of the text change based on the number of lines to avoid overlap if multiple magnitude histograms are represented
+                x_pos = (lower + upper) / 2.0 + 0.4 * (idx % 2)  # slight offset for each histogram
+                y_pos = ybase * (idx % 2 + 2)
+                ax.text(
+                    x_pos,
+                    y_pos,
+                    "\n".join(text_lines),
+                    color=line_color,
+                    fontsize=8,
+                    ha='center',
+                    va='center',
+                    bbox=dict(facecolor='white', edgecolor=line_color, boxstyle='round,pad=0.25', linewidth=1.0)
+                )
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Counts")
+    ax.set_yscale("log")
+    ax.set_title(title)
+    ax.legend(frameon=True, fontsize=legend_fontsize)  # custom fontsize
+    ax.set_xlim(min(r[0] for r in ranges), max(r[1] for r in ranges))
     plt.tight_layout()
-    plt.show()
-
-    return masks_all
+    return masks_all, stats_all
 
 def plot_training_curves(path_save):
     # Load training data
@@ -694,3 +758,358 @@ def plot_training_curves(path_save):
     plt.tight_layout()
     plt.show()
 
+def f1_radar_plot(
+    results_dict,
+    model_configs,
+    datasets,
+    dataset_colors,
+    model_styles,
+    class_names=None,
+    fig_title="F1-score Radar Plot by Class",
+    show_model_lines=True,
+    show_mean_lines=True,
+    linewidth_model=1,
+    linewidth_mean=3,
+    zero_division=0,
+    figsize=(8, 8),
+    legend_loc_colors=(0.3, 1.05),
+    legend_loc_styles=(1.0, 0.05),
+    legend_fontsize=16,
+    text_fontsize=14,
+    yticks=[0.2, 0.4, 0.6, 0.8, 1.0],
+    ylim=(0, 1),
+    tick_labelsize=18,
+    radial_labelsize=14,
+    title_fontsize=20,
+    title_pad=50.
+):
+
+    # Determine number of classes
+    sample_model = model_configs[0]['index']
+    sample_ds = datasets[0]
+    num_classes = len(np.unique(results_dict[sample_model][sample_ds]['true']))
+
+    if class_names is None:
+        class_names = [f"Class {i}" for i in range(num_classes)]
+
+    # Compute radar angles
+    angles = np.linspace(0, 2 * np.pi, num_classes, endpoint=False).tolist()
+    angles += angles[:1]
+
+    # Compute F1 scores per model/dataset
+    f1_dict = {ds: [] for ds in datasets}
+    for ds in datasets:
+        for model_cfg in model_configs:
+            model_idx = model_cfg['index']
+            yy_true = results_dict[model_idx][ds]['true']
+            yy_pred = results_dict[model_idx][ds]['label']
+            f1 = f1_score(yy_true, yy_pred, average=None, zero_division=zero_division)
+            f1_dict[ds].append(f1)
+
+    # Start plotting
+    fig, ax = plt.subplots(figsize=figsize, subplot_kw=dict(polar=True))
+
+    # Track handles for both legends
+    legend_handles_colors = []
+    legend_handles_styles = []
+
+    # Place macro-F1 boxes at spaced angles around the radar
+    text_box_angles = np.linspace(0, 2 * np.pi, len(datasets), endpoint=False) + np.pi/4
+    radius_box = ylim[1] * 1.05
+
+    for i, ds in enumerate(datasets):
+        color = dataset_colors[ds]
+        dataset_f1s = []
+
+        for model_cfg, f1_vals in zip(model_configs, f1_dict[ds]):
+            style = model_styles[model_cfg['style_group']]
+            f1_plot = f1_vals.tolist() + [f1_vals[0]]
+            dataset_f1s.append(f1_vals)
+
+            if show_model_lines:
+                ax.plot(angles, f1_plot, color=color, linestyle=style, linewidth=linewidth_model)
+
+        if show_mean_lines:
+            f1_mean = np.mean(np.array(dataset_f1s), axis=0)
+            f1_mean_plot = f1_mean.tolist() + [f1_mean[0]]
+            ax.plot(angles, f1_mean_plot, color=color, linestyle='-', linewidth=linewidth_mean)
+
+            # Annotate macro F1
+            macro_f1 = np.mean(f1_mean)
+            ax.text(
+                text_box_angles[i], radius_box,
+                f"{ds.replace('_', ' ')}\nF1={macro_f1:.2f}",
+                color=color,
+                fontsize=text_fontsize,
+                ha="center", va="center",
+                bbox=dict(facecolor='white', edgecolor=color, boxstyle='round,pad=0.4', lw=1.5)
+            )
+
+    # Axis formatting
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+    ax.set_thetagrids(np.degrees(angles[:-1]), class_names, fontsize=tick_labelsize)
+    ax.set_ylim(*ylim)
+    ax.set_yticks(yticks)
+    ax.set_yticklabels([str(y) for y in yticks], fontsize=radial_labelsize)
+    if fig_title is not None:
+        ax.set_title(fig_title, fontsize=title_fontsize, pad=title_pad)
+
+    # Legends
+    for ds in datasets:
+        legend_handles_colors.append(
+            Line2D([0], [0], color=dataset_colors[ds], linestyle='-', lw=3, label=ds.replace('_', ' '))
+        )
+
+    for key in set(cfg['style_group'] for cfg in model_configs):
+        legend_handles_styles.append(
+            Line2D([0], [0], color='gray', linestyle=model_styles[key], lw=2, label=key)
+        )
+
+    # First: color legend
+    legend_colors = ax.legend(
+        handles=legend_handles_colors, title="Dataset",
+        bbox_to_anchor=legend_loc_colors, fontsize=legend_fontsize-2, title_fontsize=legend_fontsize, fancybox=True, shadow=True,
+    )
+    ax.add_artist(legend_colors)
+
+    # Second: linestyle legend
+    legend_styles = ax.legend(
+        handles=legend_handles_styles, title="Model Type",
+        bbox_to_anchor=legend_loc_styles, fontsize=legend_fontsize-2, title_fontsize=legend_fontsize, fancybox=True, shadow=True,
+    )
+    ax.add_artist(legend_styles)
+
+    plt.show()
+
+def plot_f1_radar_by_bin_and_dataset(
+    results_dict,
+    model_configs,
+    datasets,
+    dataset_linestyles,
+    class_names,
+    bin_labels,
+    bin_colors,
+    title="F1 Radar Plot",
+    figsize=(10, 10),
+    linewidth_model=0.6,
+    linewidth_mean=3,
+    zero_division=0,
+    yticks=[0.2, 0.4, 0.6, 0.8, 1.0],
+    ylim=(0, 1),
+    tick_labelsize=18,
+    radial_labelsize=14,
+    text_fontsize=14,
+    legend_fontsize=16,
+    title_fontsize=30,
+    title_pad=50,
+    show_model_lines=True,
+    save_path=None,
+    dpi=300,
+    tight_pad=1.0,
+    dataset_labels = {'test_JPAS_matched': 'JPAS', 'val_DESI_only': 'DESI'},
+    show=True
+):
+    num_bins = len(bin_labels)
+    num_classes = len(class_names)
+    angles = np.linspace(0, 2 * np.pi, num_classes, endpoint=False).tolist()
+    angles += angles[:1]
+    text_box_angles = np.linspace(0, 2 * np.pi, num_bins, endpoint=False) + np.pi / 6
+    radius_box = ylim[1] * 1.05
+
+    fig, ax = plt.subplots(figsize=figsize, subplot_kw=dict(polar=True))
+    legend_handles_colors = []
+    legend_handles_styles = []
+
+    for bin_id in range(num_bins):
+        color = bin_colors[bin_id]
+        label = bin_labels[bin_id]
+        f1_dict_bin = {ds: [] for ds in datasets}
+
+        for ds in datasets:
+            for model_cfg in model_configs:
+                model_idx = model_cfg['index']
+                all_data = results_dict[model_idx][ds]
+                mag_bins = all_data['MAG_BIN_ID']
+                mask = mag_bins == bin_id
+                if np.sum(mask) == 0:
+                    continue
+
+                yy_true = all_data['true'][mask]
+                yy_pred = all_data['label'][mask]
+                f1 = f1_score(yy_true, yy_pred, average=None, zero_division=zero_division)
+                f1_dict_bin[ds].append(f1)
+
+                if show_model_lines:
+                    f1_plot = f1.tolist() + [f1[0]]
+                    ax.plot(angles, f1_plot, color=color, linestyle=dataset_linestyles[ds], linewidth=linewidth_model)
+
+        for i_ds, ds in enumerate(datasets):
+            if len(f1_dict_bin[ds]) == 0:
+                continue
+
+            f1_mean = np.mean(np.stack(f1_dict_bin[ds]), axis=0)
+            f1_mean_plot = f1_mean.tolist() + [f1_mean[0]]
+
+            ax.plot(angles, f1_mean_plot, color=color, linestyle=dataset_linestyles[ds], linewidth=linewidth_mean)
+
+            macro_f1 = np.mean(f1_mean)
+            label_ds = dataset_labels.get(ds, ds.replace('_', ' ')) if dataset_labels else ds.replace('_', ' ')
+            ax.text(
+                text_box_angles[bin_id] + 0.3 * i_ds, radius_box,
+                f"{label} | {label_ds}\nF1={macro_f1:.2f}",
+                color=color,
+                fontsize=text_fontsize,
+                ha="center", va="center",
+                bbox=dict(facecolor='white', edgecolor=color, boxstyle='round,pad=0.4', lw=1.5)
+            )
+
+        legend_handles_colors.append(
+            Line2D([0], [0], color=color, linestyle='-', lw=3, label=label)
+        )
+
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+    angle_degrees = np.degrees(angles[:-1])
+    ax.set_thetagrids(angle_degrees, labels=class_names)
+    for label_obj, angle in zip(ax.get_xticklabels(), angle_degrees):
+        angle = angle % 360
+        if 90 < angle < 270:
+            label_obj.set_rotation(angle + 180)
+            label_obj.set_verticalalignment('center')
+            label_obj.set_horizontalalignment('right')
+        else:
+            label_obj.set_rotation(angle)
+            label_obj.set_verticalalignment('center')
+            label_obj.set_horizontalalignment('left')
+        label_obj.set_fontsize(tick_labelsize)
+
+    ax.set_ylim(*ylim)
+    ax.set_yticks(yticks)
+    ax.set_yticklabels([str(y) for y in yticks], fontsize=radial_labelsize)
+    ax.set_title(title, fontsize=title_fontsize, pad=title_pad)
+
+    for ds in datasets:
+        label = dataset_labels.get(ds, ds.replace('_', ' '))
+        legend_handles_styles.append(
+            Line2D([0], [0], color='gray', linestyle=dataset_linestyles[ds], lw=2, label=label)
+        )
+
+    legend_colors = ax.legend(
+        handles=legend_handles_colors,
+        title="Magnitude Bin",
+        bbox_to_anchor=(0.35, 0.95),
+        fontsize=legend_fontsize - 2,
+        title_fontsize=legend_fontsize,
+        fancybox=True,
+        shadow=True,
+        ncol=2
+    )
+    ax.add_artist(legend_colors)
+
+    legend_styles = ax.legend(
+        handles=legend_handles_styles,
+        title="Dataset Type",
+        bbox_to_anchor=(0.85, 1.05),
+        fontsize=legend_fontsize - 2,
+        title_fontsize=legend_fontsize,
+        fancybox=True,
+        shadow=True
+    )
+    ax.add_artist(legend_styles)
+
+    fig.tight_layout(pad=tight_pad)
+
+    if save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+
+    if show:
+        plt.show()
+
+def plot_f1_difference_single_model(
+    results_dict,
+    model_index,
+    ds_source="val_DESI_only",
+    ds_target="test_JPAS_matched",
+    class_names=None,
+    bin_labels=None,
+    bin_colors=None,
+    bar_width=0.15,
+    figsize=(12, 6),
+    ylim=(-0.55, 0.55),
+    yticks=None,
+    title=None,
+    title_fontsize=18,
+    title_pad=20,
+    ylabel="Δ F1-score",
+    ylabel_fontsize=16,
+    tick_fontsize=14,
+    tick_rotation=15,
+    legend_fontsize=16,
+    grid=True,
+    hline=True,
+    hline_style='--',
+    hline_color='gray',
+    hline_width=1,
+    zero_division=0,
+    tight_layout=True,
+    show=True,
+    save_path=None,
+    dpi=300
+):
+    data_src = results_dict[model_index][ds_source]
+    data_tgt = results_dict[model_index][ds_target]
+
+    num_bins = np.max(data_src["MAG_BIN_ID"]) + 1
+    num_classes = len(np.unique(data_src["true"])) if class_names is None else len(class_names)
+    class_names = class_names or [f"Class {i}" for i in range(num_classes)]
+    bin_labels = bin_labels or [f"Bin {i}" for i in range(num_bins)]
+    bin_colors = bin_colors or plt.cm.viridis(np.linspace(0, 1, num_bins))
+    yticks = yticks or np.linspace(ylim[0], ylim[1], 5)
+
+    delta_f1_per_bin = []
+    for bin_id in range(num_bins):
+        mask_src = data_src['MAG_BIN_ID'] == bin_id
+        mask_tgt = data_tgt['MAG_BIN_ID'] == bin_id
+
+        if np.sum(mask_src) == 0 or np.sum(mask_tgt) == 0:
+            f1_diff = np.full(num_classes, np.nan)
+        else:
+            f1_src = f1_score(data_src['true'][mask_src], data_src['label'][mask_src], average=None, zero_division=zero_division)
+            f1_tgt = f1_score(data_tgt['true'][mask_tgt], data_tgt['label'][mask_tgt], average=None, zero_division=zero_division)
+            f1_diff = f1_tgt - f1_src
+
+        delta_f1_per_bin.append(f1_diff)
+
+    delta_f1_per_bin = np.array(delta_f1_per_bin)
+    x = np.arange(num_classes)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    for i, delta in enumerate(delta_f1_per_bin):
+        offset = (i - num_bins // 2) * bar_width + (bar_width / 2 if num_bins % 2 == 0 else 0)
+        ax.bar(x + offset, delta, width=bar_width, color=bin_colors[i], label=bin_labels[i], edgecolor='black')
+
+    if hline:
+        ax.axhline(0, color=hline_color, linestyle=hline_style, linewidth=hline_width)
+    if grid:
+        ax.grid(axis='y', linestyle=':', linewidth=0.5, alpha=0.7)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(class_names, fontsize=tick_fontsize, rotation=tick_rotation, ha='right')
+    ax.set_ylabel(ylabel, fontsize=ylabel_fontsize)
+    ax.set_ylim(*ylim)
+    ax.set_yticks(yticks)
+
+    if title:
+        ax.set_title(title, fontsize=title_fontsize, pad=title_pad)
+
+    ax.legend(title="Magnitude Bin", fontsize=legend_fontsize - 2, title_fontsize=legend_fontsize)
+
+    if tight_layout:
+        plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+
+    if show:
+        plt.show()

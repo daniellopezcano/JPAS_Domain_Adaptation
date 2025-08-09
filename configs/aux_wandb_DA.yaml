@@ -30,7 +30,7 @@ data:
 # Model Architecture
 # ════════════════════════════════════════════════════════════════════
 models:
-  path_load: wandb_no_DA/lemon-sweep-0
+  path_load: wandb_no_DA/my-sweep-1
 
 # ════════════════════════════════════════════════════════════════════
 # Training Configuration

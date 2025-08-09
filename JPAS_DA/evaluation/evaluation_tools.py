@@ -321,9 +321,10 @@ def compare_sets_performance(
     yy_true_1, yy_pred_P_1,
     yy_true_2, yy_pred_P_2,
     class_names=None,
-    y_min_Delta_F1=-0.2, y_max_Delta_F1=0.2,
+    y_min_Delta_F1=-0.24, y_max_Delta_F1=0.24,
     name_1="Set 1", name_2="Set 2",
-    plot_ROC_curves = True
+    plot_ROC_curves = True,
+    color='royalblue'
 ):
     yy_pred_1 = np.argmax(yy_pred_P_1, axis=1)
     yy_pred_2 = np.argmax(yy_pred_P_2, axis=1)
@@ -382,11 +383,10 @@ def compare_sets_performance(
 
     if class_names is None:
         class_names = [f"Class {i}" for i in range(len(f1_1))]
-    colors = get_N_colors(len(class_names), plt.cm.tab10)
 
     # Plot generalization gap in per-class F1
     plt.figure(figsize=(10, 5))
-    plt.bar(class_names, f1_2 - f1_1, color=colors)
+    plt.bar(class_names, f1_2 - f1_1, color=color)
     plt.axhline(0, color='gray', linestyle='--', linewidth=1)
     plt.ylabel(f"Δ F1-score")
     plt.title(f"{name_2} - {name_1}")
@@ -629,7 +629,6 @@ def safe_compare(a, b, path="root"):
             return False
         return True
 
-
 def evaluate_results_from_load_paths(
     paths_load,
     return_keys=['val_DESI_only', 'test_JPAS_matched'],
@@ -718,7 +717,7 @@ def evaluate_results_from_load_paths(
     logging.info("\n\n5️⃣: Load and normalize data...")
     xx_dict, yy_dict = {}, {}
 
-    for split in ["val", "test"]:
+    for split in ["train", "val", "test"]:
         xx_dict[split] = {}
         yy_dict[split] = {}
 
@@ -787,7 +786,6 @@ def evaluate_results_from_load_paths(
             }
 
     return out
-
 
 def add_magnitude_bins_to_results(
     out_dict,

@@ -485,32 +485,30 @@ def plot_combined_multiclass_roc_and_diff(y_true_1, y_pred_P_1, y_true_2, y_pred
     plt.tight_layout()
     plt.show()
 
-def plot_tsne_comparison_single_pair(
-    X_set1, y_set1,
-    X_set2, y_set2,
-    class_counts,
+def plot_tsne_single(
+    X_emb, y_labels,
+    class_counts=None,
     class_names=None,
-    title_set1="Set 1",
-    title_set2="Set 2",
+    title="t-SNE Plot",
     n_bins=128,
     sigma=2.0,
     scatter_size=1,
-    scatter_alpha=1.0
+    scatter_alpha=1.0,
+    xlim=None,
+    ylim=None
 ):
     """
-    Compare two t-SNE projections with color-coded density maps of class composition.
+    Plot a single t-SNE projection with color-coded density maps of class composition.
 
     Parameters:
-        X_set1, y_set1 : ndarray
-            t-SNE embedding and labels for the first set.
-        X_set2, y_set2 : ndarray
-            t-SNE embedding and labels for the second set.
-        class_counts : ndarray
+        X_emb, y_labels : ndarray
+            t-SNE embedding and labels for the dataset.
+        class_counts : ndarray, optional
             Number of objects per class (used for inverse frequency weighting).
         class_names : list, optional
             List of class names (for legend display).
-        title_set1, title_set2 : str
-            Titles to display above each subplot.
+        title : str
+            Title of the plot.
         n_bins : int
             Number of bins in the 2D histogram grid.
         sigma : float
@@ -519,69 +517,69 @@ def plot_tsne_comparison_single_pair(
             Size of individual points in scatter plot.
         scatter_alpha : float
             Transparency of scatter points.
+        xlim, ylim : tuple (min, max), optional
+            Limits for the x and y axes.
     """
-    y_all = np.concatenate([y_set1, y_set2])
-    unique_classes = np.unique(y_all)
+    unique_classes = np.unique(y_labels)
     cmap = plt.cm.get_cmap("tab10")
     class_color_dict = {cls: cmap(i) for i, cls in enumerate(unique_classes)}
     class_rgb = np.array([class_color_dict[cls][:3] for cls in unique_classes])
 
+    if class_counts is None:
+        class_counts = np.array([np.sum(y_labels == cls) for cls in unique_classes])
+    
     inv_freq_weights = 1 / class_counts
     inv_freq_weights /= np.sum(inv_freq_weights)
 
-    fig, axs = plt.subplots(1, 2, figsize=(14, 6), sharex=True, sharey=True)
-    datasets = [
-        (title_set1, X_set1, y_set1, axs[0]),
-        (title_set2, X_set2, y_set2, axs[1])
-    ]
+    # Determine plot limits
+    x_min = np.min(X_emb[:, 0]) if xlim is None else xlim[0]
+    x_max = np.max(X_emb[:, 0]) if xlim is None else xlim[1]
+    y_min = np.min(X_emb[:, 1]) if ylim is None else ylim[0]
+    y_max = np.max(X_emb[:, 1]) if ylim is None else ylim[1]
 
-    all_points = np.vstack([X_set1, X_set2])
-    x_min, x_max = np.min(all_points[:, 0]), np.max(all_points[:, 0])
-    y_min, y_max = np.min(all_points[:, 1]), np.max(all_points[:, 1])
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.set_title(title, fontsize=14)
+    ax.set_xlabel("t-SNE 1", fontsize=12)
+    ax.set_ylabel("t-SNE 2", fontsize=12)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.tick_params(labelsize=10)
 
-    for title, X_emb, y_labels, ax in datasets:
-        ax.set_title(f"t-SNE: {title}", fontsize=14)
-        ax.set_xlabel("t-SNE 1", fontsize=12)
-        ax.set_ylabel("t-SNE 2", fontsize=12)
-        ax.set_xlim(x_min, x_max)
-        ax.set_ylim(y_min, y_max)
-        ax.tick_params(labelsize=10)
+    H_class = np.zeros((n_bins, n_bins, len(unique_classes)))
+    for i, cls in enumerate(unique_classes):
+        idx = y_labels == cls
+        if np.sum(idx) == 0:
+            continue
+        stat, _, _, _ = binned_statistic_2d(
+            X_emb[idx, 0], X_emb[idx, 1], None,
+            statistic='count', bins=n_bins,
+            range=[[x_min, x_max], [y_min, y_max]]
+        )
+        stat = gaussian_filter(stat.T, sigma=sigma)
+        H_class[:, :, i] = stat * inv_freq_weights[i]
+        ax.scatter(X_emb[idx, 0], X_emb[idx, 1],
+                   color=class_color_dict[cls], s=scatter_size, alpha=scatter_alpha)
 
-        H_class = np.zeros((n_bins, n_bins, len(unique_classes)))
-        for i, cls in enumerate(unique_classes):
-            idx = y_labels == cls
-            if np.sum(idx) == 0:
-                continue
-            stat, _, _, _ = binned_statistic_2d(
-                X_emb[idx, 0], X_emb[idx, 1], None,
-                statistic='count', bins=n_bins,
-                range=[[x_min, x_max], [y_min, y_max]]
-            )
-            stat = gaussian_filter(stat.T, sigma=sigma)
-            H_class[:, :, i] = stat * inv_freq_weights[i]
-            ax.scatter(X_emb[idx, 0], X_emb[idx, 1],
-                       color=class_color_dict[cls], s=scatter_size, alpha=scatter_alpha)
+    H_total = np.sum(H_class, axis=2, keepdims=True)
+    proportions = np.divide(H_class, H_total, out=np.zeros_like(H_class), where=H_total != 0)
+    image_rgb = np.tensordot(proportions, class_rgb, axes=(2, 0))
 
-        H_total = np.sum(H_class, axis=2, keepdims=True)
-        proportions = np.divide(H_class, H_total, out=np.zeros_like(H_class), where=H_total != 0)
-        image_rgb = np.tensordot(proportions, class_rgb, axes=(2, 0))
+    density = H_total.squeeze()
+    eps = 1e-3
+    density_log = np.log1p(density / eps)
+    panel_max = np.max(density_log)
+    density_mod = density_log / panel_max if panel_max > 0 else density_log
+    density_mod[density < eps] = 0
+    image_rgb *= density_mod[..., None]
 
-        density = H_total.squeeze()
-        eps = 1e-3
-        density_log = np.log1p(density / eps)
-        panel_max = np.max(density_log)
-        density_mod = density_log / panel_max if panel_max > 0 else density_log
-        density_mod[density < eps] = 0
-        image_rgb *= density_mod[..., None]
-
-        ax.imshow(image_rgb, extent=[x_min, x_max, y_min, y_max],
-                  origin='lower', aspect='auto', interpolation='nearest')
+    ax.imshow(image_rgb, extent=[x_min, x_max, y_min, y_max],
+              origin='lower', aspect='auto', interpolation='nearest')
 
     legend_elements = [
         mpatches.Patch(color=class_color_dict[cls], label=class_names[i] if class_names else f"Class {cls}")
         for i, cls in enumerate(unique_classes)
     ]
-    axs[0].legend(handles=legend_elements, title="Class", fontsize=10, title_fontsize=11)
+    ax.legend(handles=legend_elements, title="Class", fontsize=10, title_fontsize=11)
 
     plt.tight_layout()
     plt.show()

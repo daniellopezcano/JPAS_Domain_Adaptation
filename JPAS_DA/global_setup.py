@@ -7,7 +7,7 @@ DATA_path = os.path.join(main_path, "DATA")
 path_models = os.path.join(main_path, "SAVED_models")
 path_configs = os.path.join(main_path, "configs")
 
-default_seed = 42
+default_seed = 137
 
 load_JPAS_data = [{
     "name": "all",
@@ -91,5 +91,6 @@ load_DESI_data_Lilianne = [
 ]
 
 load_JPAS_data_Ignasi = {
-    "fits": "jpas_idr_classification_xmatch_desi_dr1.fits.gz"
+    "fits": "jpas_idr_classification_xmatch_desi_dr1.fits.gz",
+    "fits_obs" : "jpas_mag_23_5_flag_0_40_filters.fits"
 }

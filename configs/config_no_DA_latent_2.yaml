@@ -1,0 +1,66 @@
+# ════════════════════════════════════════════════════════════════════
+# Global Configuration
+# ════════════════════════════════════════════════════════════════════
+global:
+  N_threads: 1
+
+# ════════════════════════════════════════════════════════════════════
+# Data Configuration
+# ════════════════════════════════════════════════════════════════════
+data:
+  # ── data_path ──
+  data_paths: default_global_setup
+
+  # ── clean_data_options ──
+  dict_clean_data_options: default_global_setup
+  
+  # ── Train/val/test splits ──
+  dict_split_data_options: default_global_setup
+
+  # ── Input/output keys ──
+  features_labels_options:
+    define_dataset_loaders_keys: [DESI_only]
+    keys_xx: [OBS, MORPHTYPE_int]
+    keys_yy: [SPECTYPE_int]
+    normalize: true
+    normalization_source_key: DESI_only
+    key_survey_training: DESI_only
+
+# ════════════════════════════════════════════════════════════════════
+# Model Architecture
+# ════════════════════════════════════════════════════════════════════
+models:
+  path_load: null
+
+  encoder:
+    hidden_layers: [256, 128, 86]
+    dropout_rates: [0.001, 0.001, 0.001]
+    output_dim: 2
+
+  downstream:
+    hidden_layers: [100, 86]
+    dropout_rates: [0.001, 0.001]
+
+# ════════════════════════════════════════════════════════════════════
+# Training Configuration
+# ════════════════════════════════════════════════════════════════════
+training:
+  path_save: default_global_setup
+  default_overwrite : False
+
+  sampling_strategy: true_random
+  freeze_downstream_model: false
+  
+  NN_epochs: 2500
+  NN_batches_per_epoch: 8192
+  batch_size: 65536
+  batch_size_val: null
+
+  lr: 0.005
+  weight_decay: 0.000000001
+  clip_grad_norm: 1.
+
+  seed_mode: deterministic
+  seed: 137
+
+  device: cuda

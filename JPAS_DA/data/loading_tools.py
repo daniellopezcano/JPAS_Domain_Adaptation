@@ -380,3 +380,31 @@ def load_dsets(
     logging.info("✅ Finished `load_dsets()`")
     return data
 
+
+def fits_struct_to_dict(recarray):
+    """
+    Convert a NumPy structured array (e.g., from fitsio.read)
+    into a dict: numeric fields -> np.ndarray; string/bytes -> list[str].
+    """
+    out = {}
+    for name in recarray.dtype.names:
+        col = recarray[name]
+        kind = col.dtype.kind  # 'i' int, 'u' uint, 'f' float, 'S' bytes, 'U' unicode, 'O' object
+
+        if kind in ('i', 'u', 'f'):
+            # Already numeric; ensure a contiguous array
+            out[name] = np.asarray(col)
+        elif kind == 'U':
+            # Unicode already; make a list[str]
+            out[name] = col.astype(str).tolist()
+        elif kind == 'S':
+            # FITS often stores fixed-length bytes; decode to str
+            # astype('U') converts bytes to unicode safely
+            out[name] = col.astype('U').tolist()
+        else:
+            # Fallback: try to coerce to str list
+            try:
+                out[name] = col.astype('U').tolist()
+            except Exception:
+                out[name] = [str(x) for x in col]
+    return out

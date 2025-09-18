@@ -89,41 +89,11 @@ def stack_features_from_dict_flattened(data_dict, indices):
 
 
 class DataLoader:
-    def __init__(self, xx, yy, normalize=True, provided_normalization=None):
+    def __init__(self, xx, yy):
         
         expected_length = next(iter(xx.values())).shape[0]
         logging.info(f"├── 💿 Initializing DataLoader object with {expected_length} samples...")
-
-        means = []
-        stds = []
-        for ii, key in enumerate(xx.keys()):
-            tmp_xx = xx[key]
-            if tmp_xx.shape[0] != expected_length:
-                raise ValueError(f"❌ Mismatch in number of samples for key '{key}': expected {expected_length}, got {tmp_xx.shape[0]}")
-
-            # Normalization logic: use provided mean/std if available
-            if normalize:
-                if provided_normalization is not None:
-                    tmp_mean = provided_normalization[0][ii]
-                    tmp_std = provided_normalization[1][ii]
-                    logging.debug(f"    ├── Using provided normalization for '{key}'")
-                else:
-                    tmp_mean = np.mean(tmp_xx, axis=0)
-                    tmp_std = np.std(tmp_xx, axis=0)
-                    logging.debug(f"    ├── Calculated mean/std for '{key}'")
-            else:
-                tmp_mean = np.zeros_like(np.mean(tmp_xx, axis=0))
-                tmp_std = np.ones_like(np.std(tmp_xx, axis=0))
-                logging.debug(f"    ├── No normalization applied for '{key}'")
-
-            # Normalize the feature
-            xx[key] = (tmp_xx - tmp_mean) / tmp_std
-            means.append(tmp_mean)
-            stds.append(tmp_std)
-
-        # Store
-        self.means = means
-        self.stds = stds
+        
         self.xx = xx
         self.yy = yy
         self.NN_xx = expected_length

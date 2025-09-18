@@ -43,16 +43,9 @@ training:
   freeze_downstream_model: false
   
   NN_epochs: 2048
-  # NN_batches_per_epoch: 8192
-  # batch_size: 5000
   batch_size_val: null
 
-  # lr: 0.01
-  # weight_decay: 0.0001
-  # clip_grad_norm: 100.0
-
   seed_mode: deterministic
-  # seed: 0
 
   device: cuda
 

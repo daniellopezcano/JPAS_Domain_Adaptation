@@ -2,6 +2,8 @@ import numpy as np
 import logging
 from typing import List, Dict, Tuple, Any
 
+
+
 def split_indexes_shuffled(NN, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15, seed=42):
     """
     Splits shuffled indices into three parts for train, validation, and test sets.
@@ -115,84 +117,91 @@ def extract_subset_info(LoA, data_dict, keys):
     return extracted
 
 
-def extract_and_combine_DESI_data(
-    LoA_split_only_DESI: List[List[int]],
-    LoA_split_both_DESI: List[List[int]],
-    DATA: Dict[str, Any],
-    keys_xx: List[str],
-    keys_yy: List[str]
-) -> Tuple[List[List[int]], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
-    """
-    Extracts and concatenates DESI-only and matched DESI data subsets from LoA structures.
-
-    Returns:
-    - LoA: Combined list of index lists.
-    - xx: Dictionary of concatenated feature arrays.
-    - yy: Dictionary of concatenated label arrays.
-    """
-    logging.info("|    ├── 🔧 extract_and_combine_DESI_data()")
-
-    # Step 1: Extract subset data
-    logging.info("|    ├── Extracting features and labels from DESI-only subset...")
-    sub_only = extract_subset_info(LoA_split_only_DESI, DATA, keys=keys_xx + keys_yy)
-
-    logging.info("|    ├── Extracting features and labels from DESI-matched subset...")
-    sub_both = extract_subset_info(LoA_split_both_DESI, DATA, keys=keys_xx + keys_yy)
-
-    # Step 2: Offset LoA indices from 'both' to avoid overlaps
-    shift = np.max(np.concatenate(sub_only['LoA'])) + 1
-    sub_both['LoA'] = [[idx + shift for idx in group] for group in sub_both['LoA']]
-    LoA_combined = sub_only['LoA'] + sub_both['LoA']
-    logging.info(f"|    ├── Applied index shift of {shift} to matched DESI group to ensure uniqueness")
-
-    # Step 3: Concatenate feature arrays
-    xx = {}
-    for key in keys_xx:
-        xx[key] = np.concatenate([sub_only[key], sub_both[key]], axis=0)
-        logging.debug(f"|    ├── ✔ Concatenated feature '{key}' with shape {xx[key].shape}")
-
-    # Step 4: Concatenate label arrays
-    yy = {}
-    for key in keys_yy:
-        yy[key] = np.concatenate([sub_only[key], sub_both[key]], axis=0)
-        logging.debug(f"|    ├── ✔ Concatenated label '{key}' with shape {yy[key].shape}")
-
-    logging.info("|    ├── Finished extract_and_combine_DESI_data()")
-    return LoA_combined, xx, yy
-
-
-def extract_data_using_LoA(
+def extract_from_block_by_LoA(
+    block: Dict[str, Any],
     LoA: List[List[int]],
-    DATA: Dict[str, Any],
     keys_xx: List[str],
-    keys_yy: List[str]
+    keys_yy: List[str],
 ) -> Tuple[List[List[int]], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """
-    Extracts data from a set of indices using LoA.
+    Extract arrays from a single dataset block using one LoA (list of index groups).
+
+    Requirements:
+      - Each key in `keys_xx` and `keys_yy` must exist either:
+          • as a top-level key in `block` (e.g., 'all_observations_normalized'), or
+          • as a key in `block['all_pd']`.
+      - LoA is a list of lists of row indices. Groups are concatenated in order.
 
     Returns:
-    - LoA: Same as input (repackaged).
-    - xx: Dictionary of feature arrays.
-    - yy: Dictionary of label arrays.
+      - LoA_local: local reindexed groups matching the concatenated outputs
+      - xx: dict of concatenated feature arrays
+      - yy: dict of concatenated label arrays
     """
-    logging.info("|    ├── 🔧 extract_data_using_LoA()")
+    logging.info("|    ├── 🔧 extract_from_block_by_LoA()")
 
-    # Step 1: Extract subset info
-    logging.info("|    ├── Extracting features and labels from matched dataset...")
-    sub = extract_subset_info(LoA, DATA, keys=keys_xx + keys_yy)
-    LoA = sub['LoA']
+    # --- helper: get array for a key from block (top level or all_pd)
+    def _fetch_array(b: Dict[str, Any], key: str) -> np.ndarray:
+        if key in b:
+            return np.asarray(b[key])
+        if "all_pd" in b and isinstance(b["all_pd"], dict) and key in b["all_pd"]:
+            return np.asarray(b["all_pd"][key])
+        raise KeyError(f"Requested key '{key}' not found in block (top level or all_pd).")
 
-    # Step 2: Organize feature arrays
-    xx = {}
-    for key in keys_xx:
-        xx[key] = sub[key]
-        logging.debug(f"|    ├── ✔ Retrieved feature '{key}' with shape {xx[key].shape}")
+    # --- helper: slice by groups and concatenate (supports 1D/2D arrays)
+    def _slice_by_groups(arr: np.ndarray, groups: List[List[int]]) -> np.ndarray:
+        parts = []
+        for g in groups:
+            idx = np.asarray(g, dtype=int)
+            parts.append(arr[idx] if arr.ndim == 1 else arr[idx, ...])
+        if not parts:
+            return np.empty((0,) + arr.shape[1:], dtype=arr.dtype) if arr.ndim > 1 else np.empty((0,), dtype=arr.dtype)
+        return np.concatenate(parts, axis=0)
 
-    # Step 3: Organize label arrays
-    yy = {}
-    for key in keys_yy:
-        yy[key] = sub[key]
-        logging.debug(f"|    ├── ✔ Retrieved label '{key}' with shape {yy[key].shape}")
+    # --- helper: local reindex [0..total-1] per group
+    def _reindex_locally(groups: List[List[int]]) -> List[List[int]]:
+        reindexed, offset = [], 0
+        for g in groups:
+            L = len(g)
+            reindexed.append(list(range(offset, offset + L)))
+            offset += L
+        return reindexed
 
-    logging.info("|    ├── Finished extract_data_matched()")
-    return LoA, xx, yy
+    want_keys = list(dict.fromkeys(keys_xx + keys_yy))  # unique, keep order
+
+    # pick first available key as reference to validate dims later
+    ref_key = None
+    for k in want_keys:
+        try:
+            _ = _fetch_array(block, k)
+            ref_key = k
+            break
+        except KeyError:
+            continue
+    if ref_key is None:
+        raise KeyError("[extract_from_block_by_LoA] None of the requested keys exist in this block.")
+
+    logging.info(f"|    ├── Using reference key: '{ref_key}'")
+
+    arrays: Dict[str, np.ndarray] = {}
+    for k in want_keys:
+        arr = _fetch_array(block, k)
+        arrays[k] = _slice_by_groups(arr, LoA)
+        logging.debug(f"|    │   • key='{k}', out shape={arrays[k].shape}")
+
+    LoA_local = _reindex_locally(LoA)
+
+    xx, yy = {}, {}
+    for k in keys_xx:
+        if k not in arrays:
+            raise KeyError(f"[extract_from_block_by_LoA] Requested feature key '{k}' was not extracted.")
+        xx[k] = arrays[k]
+        logging.debug(f"|    ├── ✔ Feature '{k}' → {xx[k].shape}")
+
+    for k in keys_yy:
+        if k not in arrays:
+            raise KeyError(f"[extract_from_block_by_LoA] Requested label key '{k}' was not extracted.")
+        yy[k] = arrays[k]
+        logging.debug(f"|    ├── ✔ Label '{k}' → {yy[k].shape}")
+
+    logging.info("|    ├── Finished extract_from_block_by_LoA()")
+    return LoA_local, xx, yy

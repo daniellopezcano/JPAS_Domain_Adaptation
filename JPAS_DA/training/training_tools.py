@@ -95,10 +95,6 @@ def train_model(
         else:
             os.makedirs(path_save)
             logging.info(f"Created directory: '{path_save}'")
-        
-        # Save normalization parameters
-        np.save(os.path.join(path_save, 'means.npy'), np.array(dset_train.means, dtype=object), allow_pickle=True)
-        np.save(os.path.join(path_save, 'stds.npy'), np.array(dset_train.stds, dtype=object), allow_pickle=True)
 
     # Move models to device
     model_encoder.to(device)
@@ -199,7 +195,7 @@ def train_single_epoch(
         model_downstream.eval() # This will prevent batch noremalization layer from being updated
 
     print_every = max(1, NN_batches_per_epoch // print_progress)
-
+    logging.info(f"📚 Training {NN_batches_per_epoch} batches...")
     for batch_idx in range(NN_batches_per_epoch):
         # Set random seed
         if seed_mode == "random":
@@ -208,7 +204,7 @@ def train_single_epoch(
             current_seed = seed0 + batch_idx
         else:
             current_seed = seed
-
+        logging.debug(f"📚 Batch {batch_idx}/{NN_batches_per_epoch} | Seed: {current_seed}")
         # === Load batch ===
         xx, yy_true = dset_train(
             batch_size,
@@ -217,14 +213,16 @@ def train_single_epoch(
             to_torch=True,
             device=device
         )
-
+        logging.debug(f"xx.shape: {xx.shape} | yy_true.shape: {yy_true.shape}")
         # === Forward ===
         features = model_encoder(xx)
         logits = model_downstream(features)
-
+        logging.debug(f"features.shape: {features.shape} | logits.shape: {logits.shape}")
+        logging.debug(f"features.dtype: {features.dtype} | logits.dtype: {logits.dtype}")
+        logging.debug(f"yy_true: {yy_true}")
         # === Loss ===
         loss = loss_functions.cross_entropy(yy_true, logits, loss_function_dict["class_weights"].to(device))
-
+        logging.debug(f"loss: {loss}")
         # === Backprop ===
         loss.backward()
 

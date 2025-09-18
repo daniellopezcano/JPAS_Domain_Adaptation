@@ -9,12 +9,14 @@ import sys
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import Normalize
+from matplotlib.lines import Line2D
 
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 
 from scipy.stats import binned_statistic_2d
 from scipy.ndimage import gaussian_filter
+from scipy.stats import gaussian_kde
 
 from sklearn.metrics import roc_curve
 from scipy.interpolate import interp1d
@@ -485,7 +487,7 @@ def plot_combined_multiclass_roc_and_diff(y_true_1, y_pred_P_1, y_true_2, y_pred
     plt.tight_layout()
     plt.show()
 
-def plot_tsne_single(
+def plot_latents_scatter(
     X_emb, y_labels,
     class_counts=None,
     class_names=None,
@@ -495,61 +497,53 @@ def plot_tsne_single(
     scatter_size=1,
     scatter_alpha=1.0,
     xlim=None,
-    ylim=None
+    ylim=None,
+    xlabel="t-SNE 1",
+    ylabel="t-SNE 2"
 ):
-    """
-    Plot a single t-SNE projection with color-coded density maps of class composition.
 
-    Parameters:
-        X_emb, y_labels : ndarray
-            t-SNE embedding and labels for the dataset.
-        class_counts : ndarray, optional
-            Number of objects per class (used for inverse frequency weighting).
-        class_names : list, optional
-            List of class names (for legend display).
-        title : str
-            Title of the plot.
-        n_bins : int
-            Number of bins in the 2D histogram grid.
-        sigma : float
-            Gaussian smoothing sigma.
-        scatter_size : float
-            Size of individual points in scatter plot.
-        scatter_alpha : float
-            Transparency of scatter points.
-        xlim, ylim : tuple (min, max), optional
-            Limits for the x and y axes.
-    """
     unique_classes = np.unique(y_labels)
     cmap = plt.cm.get_cmap("tab10")
     class_color_dict = {cls: cmap(i) for i, cls in enumerate(unique_classes)}
     class_rgb = np.array([class_color_dict[cls][:3] for cls in unique_classes])
 
     if class_counts is None:
-        class_counts = np.array([np.sum(y_labels == cls) for cls in unique_classes])
-    
-    inv_freq_weights = 1 / class_counts
-    inv_freq_weights /= np.sum(inv_freq_weights)
+        class_counts = np.array([(y_labels == cls).sum() for cls in unique_classes])
 
-    # Determine plot limits
-    x_min = np.min(X_emb[:, 0]) if xlim is None else xlim[0]
-    x_max = np.max(X_emb[:, 0]) if xlim is None else xlim[1]
-    y_min = np.min(X_emb[:, 1]) if ylim is None else ylim[0]
-    y_max = np.max(X_emb[:, 1]) if ylim is None else ylim[1]
+    inv_freq_weights = 1.0 / np.maximum(class_counts, 1)
+    inv_freq_weights /= inv_freq_weights.sum()
 
-    fig, ax = plt.subplots(figsize=(7, 6))
+    # Determine plot window
+    x_data_min, x_data_max = np.min(X_emb[:, 0]), np.max(X_emb[:, 0])
+    y_data_min, y_data_max = np.min(X_emb[:, 1]), np.max(X_emb[:, 1])
+    x_min, x_max = (x_data_min, x_data_max) if xlim is None else (xlim[0], xlim[1])
+    y_min, y_max = (y_data_min, y_data_max) if ylim is None else (ylim[0], ylim[1])
+
+    # Sanity: swap if limits are reversed
+    if x_min > x_max: x_min, x_max = x_max, x_min
+    if y_min > y_max: y_min, y_max = y_max, y_min
+
+    # Precompute in-window mask (used for scatter)
+    in_x = (X_emb[:, 0] >= x_min) & (X_emb[:, 0] <= x_max)
+    in_y = (X_emb[:, 1] >= y_min) & (X_emb[:, 1] <= y_max)
+    in_win = in_x & in_y
+
+    fig, ax = plt.subplots(figsize=(6, 6))
     ax.set_title(title, fontsize=14)
-    ax.set_xlabel("t-SNE 1", fontsize=12)
-    ax.set_ylabel("t-SNE 2", fontsize=12)
-    ax.set_xlim(x_min, x_max)
-    ax.set_ylim(y_min, y_max)
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
     ax.tick_params(labelsize=10)
 
+    # Fix limits up front + disable autoscale so artists won't expand the view
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_autoscale_on(False)  # <- key line
+
+    # Density per class (bounded to the requested window)
     H_class = np.zeros((n_bins, n_bins, len(unique_classes)))
     for i, cls in enumerate(unique_classes):
-        idx = y_labels == cls
-        if np.sum(idx) == 0:
-            continue
+        idx = (y_labels == cls)
+        # For histogram: still count everything that falls in the specified window
         stat, _, _, _ = binned_statistic_2d(
             X_emb[idx, 0], X_emb[idx, 1], None,
             statistic='count', bins=n_bins,
@@ -557,11 +551,20 @@ def plot_tsne_single(
         )
         stat = gaussian_filter(stat.T, sigma=sigma)
         H_class[:, :, i] = stat * inv_freq_weights[i]
-        ax.scatter(X_emb[idx, 0], X_emb[idx, 1],
-                   color=class_color_dict[cls], s=scatter_size, alpha=scatter_alpha)
 
+        # For scatter: only draw points inside the window (faster & respects limits)
+        scatter_mask = idx & in_win
+        if scatter_mask.any():
+            ax.scatter(
+                X_emb[scatter_mask, 0], X_emb[scatter_mask, 1],
+                color=class_color_dict[cls],
+                s=scatter_size, alpha=scatter_alpha,
+                clip_on=True
+            )
+
+    # Composite RGB density overlay
     H_total = np.sum(H_class, axis=2, keepdims=True)
-    proportions = np.divide(H_class, H_total, out=np.zeros_like(H_class), where=H_total != 0)
+    proportions = np.divide(H_class, H_total, out=np.zeros_like(H_class), where=(H_total != 0))
     image_rgb = np.tensordot(proportions, class_rgb, axes=(2, 0))
 
     density = H_total.squeeze()
@@ -572,17 +575,332 @@ def plot_tsne_single(
     density_mod[density < eps] = 0
     image_rgb *= density_mod[..., None]
 
-    ax.imshow(image_rgb, extent=[x_min, x_max, y_min, y_max],
-              origin='lower', aspect='auto', interpolation='nearest')
+    ax.imshow(
+        image_rgb,
+        extent=[x_min, x_max, y_min, y_max],
+        origin='lower', aspect='auto', interpolation='nearest',
+        zorder=0
+    )
 
     legend_elements = [
-        mpatches.Patch(color=class_color_dict[cls], label=class_names[i] if class_names else f"Class {cls}")
+        mpatches.Patch(color=class_color_dict[cls],
+                       label=(class_names[i] if class_names else f"Class {cls}"))
         for i, cls in enumerate(unique_classes)
     ]
     ax.legend(handles=legend_elements, title="Class", fontsize=10, title_fontsize=11)
 
     plt.tight_layout()
     plt.show()
+
+
+def plot_latents_scatter_val_test(
+    X_val, y_val,
+    X_test, y_test,
+    *,
+    class_names=None,
+    title="Latent space (val vs test)",
+    marker_val="o",
+    marker_test="^",
+    size_val=8,
+    size_test=8,
+    alpha_val=0.9,
+    alpha_test=0.9,
+    xlim=None,
+    ylim=None,
+    subsample=None,            # float in (0,1] for fraction, or int >=1 for max count; applies to each split
+    seed=42,
+    edgecolor="none",
+    linewidths=0.0
+):
+    """
+    Overlay a 2D latent embedding for validation and test sets as a scatter plot.
+    Colors encode classes; markers encode split (val vs test).
+
+    Parameters
+    ----------
+    X_val, X_test : (N, 2) arrays of embeddings
+    y_val, y_test : (N,) label arrays
+    class_names   : list or dict (label->name), optional
+    subsample     : float in (0,1] or int >=1, optional (applied independently to val and test)
+    """
+
+    X_val = np.asarray(X_val);  X_test = np.asarray(X_test)
+    y_val = np.asarray(y_val);  y_test = np.asarray(y_test)
+    assert X_val.shape[1] == 2 and X_test.shape[1] == 2, "X_val/X_test must be (N,2)."
+
+    rng = np.random.default_rng(seed)
+
+    def _subsample_global(X, y, subsample):
+        if subsample is None:
+            return X, y
+        n = len(y)
+        if isinstance(subsample, float):
+            if not (0 < subsample <= 1):
+                # clamp silently to valid range
+                subs = min(max(subsample, 1e-9), 1.0)
+            else:
+                subs = subsample
+            k = max(1, int(round(subs * n)))
+        elif isinstance(subsample, (int, np.integer)):
+            k = min(int(subsample), n)
+        else:
+            return X, y
+        if k >= n:
+            return X, y
+        idx = rng.choice(n, size=k, replace=False)
+        return X[idx], y[idx]
+
+    # Global (per-split) subsampling to keep relative class frequencies ~unchanged
+    X_val, y_val   = _subsample_global(X_val, y_val, subsample)
+    X_test, y_test = _subsample_global(X_test, y_test, subsample)
+
+    # Classes and colors
+    unique_classes = np.unique(np.concatenate([y_val, y_test]))
+    classes_sorted = list(unique_classes)
+    cmap = plt.cm.get_cmap("tab10")
+    color_map = {cls: cmap(i % 10) for i, cls in enumerate(classes_sorted)}
+
+    # Ax limits
+    x_all = np.concatenate([X_val[:, 0], X_test[:, 0]])
+    y_all = np.concatenate([X_val[:, 1], X_test[:, 1]])
+    x_min, x_max = (x_all.min(), x_all.max()) if xlim is None else xlim
+    y_min, y_max = (y_all.min(), y_all.max()) if ylim is None else ylim
+
+    fig, ax = plt.subplots(figsize=(6., 6.))
+    ax.set_title(title, fontsize=14)
+    ax.set_xlabel("dim 1", fontsize=12)
+    ax.set_ylabel("dim 2", fontsize=12)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.tick_params(labelsize=10)
+
+    # Plot per class for consistent colors
+    for cls in classes_sorted:
+        # validation
+        iv = (y_val == cls)
+        if iv.any():
+            ax.scatter(
+                X_val[iv, 0], X_val[iv, 1],
+                s=size_val, marker=marker_val,
+                c=[color_map[cls]], alpha=alpha_val,
+                edgecolor=edgecolor, linewidths=linewidths
+            )
+        # test
+        it = (y_test == cls)
+        if it.any():
+            ax.scatter(
+                X_test[it, 0], X_test[it, 1],
+                s=size_test, marker=marker_test,
+                c=[color_map[cls]], alpha=alpha_test,
+                edgecolor=edgecolor, linewidths=linewidths
+            )
+
+    # Legend A: class colors
+    if isinstance(class_names, dict):
+        class_labels = [class_names.get(cls, str(cls)) for cls in classes_sorted]
+    elif isinstance(class_names, (list, tuple)) and len(class_names) == len(classes_sorted):
+        class_labels = list(class_names)
+    else:
+        class_labels = [str(cls) for cls in classes_sorted]
+
+    class_handles = [
+        Line2D([0], [0], marker="o", color="w",
+               markerfacecolor=color_map[cls], markeredgecolor="none",
+               markersize=8, label=lab)
+        for cls, lab in zip(classes_sorted, class_labels)
+    ]
+    leg_classes = ax.legend(
+        handles=class_handles, title="Class", loc="upper left",
+        fontsize=9, title_fontsize=10, frameon=True
+    )
+    ax.add_artist(leg_classes)
+
+    # Legend B: split markers
+    ds_handles = [
+        Line2D([0], [0], marker=marker_val, color="k", linestyle="None", markersize=8, label="val"),
+        Line2D([0], [0], marker=marker_test, color="k", linestyle="None", markersize=8, label="test"),
+    ]
+    ax.legend(handles=ds_handles, title="Split", loc="lower right",
+              fontsize=9, title_fontsize=10, frameon=True)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_latent_density_2d(
+    X,
+    *,
+    title="Latent density",
+    # ---- density method ----
+    density_method="hist",     # "hist" or "kde"
+    bins=128,                  # used if density_method="hist" or for KDE grid resolution
+    sigma=1.5,                 # smoothing (bin units) for "hist" only
+    kde_bw="scott",            # KDE bandwidth: "scott", "silverman", or float
+    # ---- normalization & color ----
+    norm_mode="max",           # "max" -> normalize by max; "sum" -> normalized to integrate to 1 over grid
+    color_scale="log",         # "log" or "linear"
+    linear_vmax=99,            # percentile for vmax in linear mode (helps visibility)
+    mask_zero_support=True,    # keep true zeros as 0 so they map to the lowest colormap color
+    cmap="viridis",
+    # ---- contours ----
+    contour_fracs=(0.8, 0.5, 0.2),   # as fractions of the normalized density (i.e., 0..1)
+    contour_colors="k",
+    contour_linewidths=0.8,
+    contour_label_fontsize=8,        # fontsize for contour labels
+    contour_label_color="k",         # color for contour labels
+    # ---- points overlay ----
+    show_points=False,
+    points_alpha=0.15,
+    points_size=3,
+    random_subsample=None,
+    # ---- view ----
+    xlim=None,
+    ylim=None,
+    seed=42,
+):
+    """
+    Plot a 2D density of latent points with optional log coloring, isodensity contours,
+    and a light scatter overlay.
+
+    density_method:
+      - "hist": 2D histogram + Gaussian smoothing (sigma in bin units)
+      - "kde" : Gaussian KDE (bandwidth via `kde_bw`), evaluated on a regular grid
+    """
+    X = np.asarray(X, dtype=float)
+    assert X.ndim == 2 and X.shape[1] == 2, "X must be (N,2)."
+    rng = np.random.default_rng(seed)
+
+    # ---- bounds ----
+    if xlim is None:
+        x_min, x_max = X[:, 0].min(), X[:, 0].max()
+    else:
+        x_min, x_max = xlim
+    if ylim is None:
+        y_min, y_max = X[:, 1].min(), X[:, 1].max()
+    else:
+        y_min, y_max = ylim
+
+    # choose grid resolution
+    nx = ny = int(bins)
+
+    # >>> use EDGES (len = bins+1) for histogram
+    x_edges = np.linspace(x_min, x_max, nx + 1)
+    y_edges = np.linspace(y_min, y_max, ny + 1)
+
+    # centers (len = bins) for contour grid so shapes match Z
+    x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
+    y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+    XX, YY = np.meshgrid(x_centers, y_centers, indexing="xy")
+
+    # ---- density on the grid ----
+    if density_method == "hist":
+        # H shape: (nx, ny) before transpose → transpose to (ny, nx)
+        H, _, _ = np.histogram2d(X[:, 0], X[:, 1], bins=[x_edges, y_edges])
+        H = H.T  # now (ny, nx), same as XX, YY
+        if sigma and sigma > 0:
+            H = gaussian_filter(H, sigma=sigma, mode="nearest")
+        density = H.astype(float)
+
+    elif density_method == "kde":
+        # evaluate KDE on centers so it matches (ny, nx)
+        kde = gaussian_kde(X.T, bw_method=kde_bw)
+        Zk = kde(np.vstack([XX.ravel(), YY.ravel()])).reshape(ny, nx)
+        density = Zk
+    else:
+        raise ValueError("density_method must be 'hist' or 'kde'.")
+
+    # ---- normalization ----
+    if norm_mode == "sum":
+        total = density.sum()
+        if total > 0:
+            dens_norm = density / total
+        else:
+            dens_norm = density * 0.0
+    elif norm_mode == "max":
+        m = density.max()
+        dens_norm = density / m if m > 0 else density * 0.0
+    else:
+        raise ValueError("norm_mode must be 'max' or 'sum'.")
+
+    # ---- color scaling ----
+    if color_scale == "log":
+        # log1p on nonzeros; keep exact zeros as 0 so they map to the lowest color
+        Z = dens_norm.copy()
+        nonzero = Z > 0
+        if nonzero.any():
+            Z[nonzero] = np.log1p(Z[nonzero] / Z[nonzero].max())
+        # nonzero max rescales into (0,1]; zeros remain 0
+        vmin, vmax = 0.0, 1.0
+    elif color_scale == "linear":
+        # stretch to [0, 1] using percentile for robustness
+        vmin = 0.0
+        vmax = np.percentile(dens_norm, linear_vmax)
+        if vmax <= 0:
+            vmax = 1.0
+        Z = np.clip(dens_norm / vmax, 0, 1)
+    else:
+        raise ValueError("color_scale must be 'log' or 'linear'.")
+
+    # ---- optional masking of zero-support regions ----
+    if mask_zero_support:
+        # Leave zeros as 0 so they take the lowest color of the colormap
+        pass  # already handled by keeping zeros as 0 in Z
+    # else: nothing special — Z already in 0..1
+
+    # ---- plot ----
+    fig, ax = plt.subplots(figsize=(7.5, 6.5))
+    ax.set_title(title, fontsize=14)
+    ax.set_xlabel("dim 1", fontsize=12)
+    ax.set_ylabel("dim 2", fontsize=12)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.tick_params(labelsize=10)
+
+    # image
+    im = ax.imshow(
+        Z, origin="lower", aspect="auto",
+        extent=[x_edges[0], x_edges[-1], y_edges[0], y_edges[-1]],
+        cmap=cmap, vmin=0.0, vmax=1.0, interpolation="nearest"
+    )
+
+    # contours on the normalized density (so levels == fracs)
+    if contour_fracs and len(contour_fracs) > 0:
+        levels = np.clip(np.array(contour_fracs, dtype=float), 0.0, 1.0)
+        CS = ax.contour(
+            XX, YY, dens_norm,
+            levels=levels,
+            colors=contour_colors,
+            linewidths=contour_linewidths
+        )
+        # label contours: values are the normalized levels (0..1)
+        if CS.allsegs and any(len(s) for s in CS.allsegs):
+            fmt = lambda v: f"{v:.2f}"
+            ax.clabel(
+                CS, inline=True, fmt=fmt,
+                fontsize=contour_label_fontsize,
+                colors=contour_label_color
+            )
+
+    # scatter overlay
+    if show_points:
+        pts = X
+        if isinstance(random_subsample, (int, np.integer)) and random_subsample > 0:
+            k = min(int(random_subsample), len(pts))
+            idx = rng.choice(len(pts), size=k, replace=False)
+            pts = pts[idx]
+        ax.scatter(
+            pts[:, 0], pts[:, 1],
+            s=points_size, alpha=points_alpha,
+            c="k", marker=".", linewidths=0
+        )
+
+    # colorbar always 0..1 after our normalization
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("normalized density (0–1)", fontsize=11)
+    cbar.ax.tick_params(labelsize=10)
+
+    plt.tight_layout()
+    plt.show()
+
 
 def safe_compare(a, b, path="root"):
     """Recursively compare two structures with detailed debug logs and NumPy-safe checks."""
@@ -656,7 +974,6 @@ def evaluate_results_from_load_paths(
 
     # Extract paths and options
     path_save = config_ref['training']['path_save']
-    means, stds = save_load_tools.load_means_stds(path_save)
 
     data_paths = config_data["data_paths"]
     root_path = data_paths["root_path"]
@@ -735,21 +1052,7 @@ def evaluate_results_from_load_paths(
 
             LoA, xx, yy = process_dset_splits.extract_data_using_LoA(subset, DATA[source], keys_xx, keys_yy)
 
-            stacked_features = []
-            for i, k in enumerate(xx):
-                arr = np.asarray(xx[k])
-                if arr.size == 0:
-                    continue
-                normed = (arr - means[i]) / stds[i]
-                stacked_features.append(np.atleast_2d(normed).reshape(arr.shape[0], -1))
-
-            if stacked_features:
-                xx_stacked = np.concatenate(stacked_features, axis=1)
-            else:
-                logging.warning(f"⚠️ Feature stack is empty for split={split}, loader={loader}. Creating dummy array.")
-                xx_stacked = np.empty((0, sum([np.prod(np.shape(xx[k])[1:]) for k in keys_xx])))
-
-            xx_dict[split][str(loader)] = torch.tensor(xx_stacked, dtype=torch.float32)
+            xx_dict[split][str(loader)] = torch.tensor(xx, dtype=torch.float32)
             yy_dict[split][str(loader)] = yy
 
     # ─────────────────────────────────────────────────────────────

@@ -8,23 +8,10 @@ global:
 # Data Configuration
 # ════════════════════════════════════════════════════════════════════
 data:
-  # ── data_path ──
-  data_paths: default_global_setup
-
-  # ── clean_data_options ──
-  dict_clean_data_options: default_global_setup
-  
-  # ── Train/val/test splits ──
-  dict_split_data_options: default_global_setup
-
-  # ── Input/output keys ──
-  features_labels_options:
-    define_dataset_loaders_keys: [DESI_only]
-    keys_xx: [OBS, MORPHTYPE_int]
-    keys_yy: [SPECTYPE_int]
-    normalize: true
-    normalization_source_key: DESI_only
-    key_survey_training: DESI_only
+  cleaning_config: default_global_setup
+  keys_xx: ["all_observations_normalized","all_errors_normalized","MORPHTYPE_int"]
+  keys_yy: ["SPECTYPE_int"]
+  key_survey_training: DESI_mocks_Raul
 
 # ════════════════════════════════════════════════════════════════════
 # Model Architecture
@@ -35,7 +22,7 @@ models:
   encoder:
     hidden_layers: [256, 128, 86]
     dropout_rates: [0.001, 0.001, 0.001]
-    output_dim: 16
+    output_dim: 2
 
   downstream:
     hidden_layers: [100, 86]
@@ -51,7 +38,7 @@ training:
   sampling_strategy: true_random
   freeze_downstream_model: false
   
-  NN_epochs: 3000
+  NN_epochs: 500
   NN_batches_per_epoch: 8192
   batch_size: 65536
   batch_size_val: null

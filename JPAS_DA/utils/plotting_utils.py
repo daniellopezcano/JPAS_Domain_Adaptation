@@ -511,7 +511,10 @@ def plot_neighbors_and_spatial_distribution(kd_counts, R_arcmin, positions, min_
     plt.tight_layout()
     plt.show()
 
-def plot_histogram_with_ranges(magnitudes, ranges=None, colors=None, bins=200, x_label='DESI Magnitude (R)', title='Histogram of DESI Magnitudes (R)'):
+def plot_histogram_with_ranges(
+        magnitudes, ranges=None, colors=None, bins=200, x_label='DESI Magnitude (R)', title='Histogram of DESI Magnitudes (R)',
+        x_range=None, y_range=None
+    ):
     """
     Plot a histogram of magnitudes with specified background color ranges and text annotations for percentage of objects in each range.
 
@@ -571,6 +574,14 @@ def plot_histogram_with_ranges(magnitudes, ranges=None, colors=None, bins=200, x
     ax.set_xlabel(x_label, fontsize=14)
     ax.set_ylabel('Frequency', fontsize=14)
     ax.set_title(title, fontsize=16)
+
+    # limit the x-axis range if provided
+    if x_range is not None:
+        ax.set_xlim(x_range)
+
+    # limit the y-axis range if provided
+    if y_range is not None:
+        ax.set_ylim(y_range)
 
     # Adjust tick parameters
     ax.tick_params(axis='both', which='major', labelsize=12)

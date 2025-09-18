@@ -1,5 +1,6 @@
-from typing import List, Dict, Tuple, Any, Optional
 import logging
+from typing import Any, Dict, List, Tuple, Optional
+import numpy as np
 
 from JPAS_DA.data import loading_tools
 from JPAS_DA.data import cleaning_tools
@@ -7,232 +8,169 @@ from JPAS_DA.data import crossmatch_tools
 from JPAS_DA.data import process_dset_splits
 from JPAS_DA.data import data_loaders
 
-def wrapper_data_loaders(
+
+def wrapper_build_dataloaders(
+    *,
+    # --- Loading ---
     root_path: str,
-    load_JPAS_data: List[Dict[str, Any]],
-    load_DESI_data: List[Dict[str, Any]],
+    include: List[str],
+    dataset_params: Dict[str, Dict[str, Any]],
     random_seed_load: int,
-    apply_masks: List[str],
-    mask_indices: List[int],
-    magic_numbers: List[float],
-    i_band_sn_threshold: float,
-    magnitude_flux_key: Optional[str],
-    magnitude_threshold: Optional[float],
-    z_lim_QSO_cut: float,
-    manually_select_one_SPECTYPE_vs_rest: Optional[str],
-    train_ratio_both: float,
-    val_ratio_both: float,
-    test_ratio_both: float,
-    random_seed_split_both: int,
-    train_ratio_only_DESI: float,
-    val_ratio_only_DESI: float,
-    test_ratio_only_DESI: float,
-    random_seed_split_only_DESI: int,
-    define_dataset_loaders_keys: Optional[List[str]],
+
+    # --- Cleaning ---
+    cleaning_config: Dict[str, Any],
+
+    # --- Crossmatch & splits ---
+    crossmatch_pair: Tuple[str, str] = ("DESI_mocks_Raul", "JPAS_x_DESI_Raul"),
+    id_key: str = "TARGETID",
+    split_config: Dict[str, Any],
+
+    # --- Features & labels ---
     keys_xx: List[str],
     keys_yy: List[str],
-    normalization_source_key: Optional[str],
-    normalize: bool,
-    provided_normalization: Optional[Tuple[List[float], List[float]]] = None
-) -> Dict[str, Dict[str, Any]]:
+
+    # --- Output control ---
+    return_artifacts: bool = True,
+) -> Dict[str, Any]:
     """
-    High-level wrapper that orchestrates the full data preparation pipeline for domain adaptation 
-    between JPAS and DESI datasets. It performs the following steps:
+    Build dataloaders with the new pipeline:
+      load_data_bundle -> clean_data_pipeline -> crossmatch -> split -> extract & build DataLoader
 
-    1. Loads raw data files for JPAS and DESI from disk, applying optional downsampling.
-    2. Applies multiple user-defined cleaning and masking filters to the photometry.
-    3. Crossmatches sources between surveys using `TARGETID` to identify shared and exclusive targets.
-    4. Splits the data into training, validation, and test sets based on user-defined proportions.
-    5. Constructs standardized `DataLoader` objects for each subset, reusing normalization statistics 
-       from the training set to ensure consistency.
-
-    Parameters:
+    Parameters
     ----------
     root_path : str
-        Path to the base folder where data files are stored.
-    load_JPAS_data : list of dict
-        Each dict must contain 'name', 'npy', 'csv', and optionally 'sample_percentage'.
-    load_DESI_data : list of dict
-        Each dict must contain 'name', 'npy', 'csv', and 'sample_percentage'.
+        Base data path.
+    include : list[str]
+        Dataset names to load (e.g., ["JPAS_x_DESI_Raul", "DESI_mocks_Raul"]).
+    dataset_params : dict[str, dict]
+        Per-dataset kwargs forwarded to `loading_tools.load_data_bundle`, e.g.:
+            {
+              "JPAS_x_DESI_Raul": {"datasets": load_JPAS_x_DESI_Raul},
+              "DESI_mocks_Raul":  {"datasets": load_DESI_mocks_Raul},
+              "Ignasi":           {"datasets": load_Ignasi},
+            }
     random_seed_load : int
-        Seed for sampling during dataset loading.
-    apply_masks : list of str
-        Masking rules to apply (e.g. 'magic_numbers', 'unreliable', etc.).
-    mask_indices : list of int
-        Indices in the wavelength/filter space where to apply masks.
-    magic_numbers : list of float
-        Values to treat as invalid (e.g. 99, -99).
-    i_band_sn_threshold : float
-        Minimum signal-to-noise required in the i-band (or relevant band).
-    magnitude_flux_key : str, optional
-        Flux key to compute magnitude ('DESI_FLUX_R', etc.).
-    magnitude_threshold : float, optional
-        Upper magnitude limit to keep samples.
-    z_lim_QSO_cut : float
-        Upper redshift limit for QSO cut in cleaning.
-    manually_select_one_SPECTYPE_vs_rest : str, optional
-        Manually select one SPECTYPE vs the rest.
-    train_ratio_both / val_ratio_both / test_ratio_both : float
-        Splitting ratios for sources matched in both JPAS and DESI.
-    random_seed_split_both : int
-        Seed for splitting matched samples.
-    train_ratio_only_DESI / val_ratio_only_DESI / test_ratio_only_DESI : float
-        Splitting ratios for DESI-only sources.
-    random_seed_split_only_DESI : int
-        Seed for splitting DESI-only sources.
-    define_dataset_loaders_keys : list of str
-        List of keys to include in the DataLoaders (e.g. ['DESI_combined', 'DESI_only', 'DESI_matched', 'JPAS_matched']).
-    keys_xx : list of str
-        Feature keys to include (e.g. ['OBS', 'ERR', 'MORPHTYPE_int']).
-    keys_yy : list of str
-        Label keys to include (e.g. ['SPECTYPE_int']).
-    normalization_source_key : str
-        Key to use for normalization (e.g. 'DESI_combined').
-    normalize : bool
-        Whether to normalize input features. Normalization statistics are taken from the training set.
-    provided_normalization : tuple of list of float, optional
-        Pre-computed mean and std values for normalization.
+        Seed for loaders that sample when loading.
+    cleaning_config : dict
+        Config for `cleaning_tools.clean_data_pipeline`.
+    crossmatch_pair : (str, str)
+        Datasets to crossmatch by `id_key`. First is treated as “outersection”,
+        second as “intersection”, matching your current usage.
+    id_key : str
+        ID key inside each block’s all_pd (default "TARGETID").
+    split_config : dict
+        Must contain:
+            train_ratio_intersection, val_ratio_intersection, test_ratio_intersection,
+            random_seed_split_intersection,
+            train_ratio_outersection,  val_ratio_outersection,  test_ratio_outersection,
+            random_seed_split_outersection
+    keys_xx, keys_yy : list[str]
+        Feature/label keys expected to exist in the block (top-level or block['all_pd']).
+    return_artifacts : bool
+        If True, also returns DATA, Dict_LoA, Dict_LoA_split.
 
-    Returns:
+    Returns
     -------
-    dset_loaders : dict
-        Dictionary with keys:
-            - 'DESI_combined': DataLoaders from DESI-only + matched samples.
-            - 'DESI_matched': DataLoaders from matched DESI samples only.
-            - 'JPAS_matched': DataLoaders from matched JPAS samples only.
-        Each entry contains 'train', 'val', 'test' subkeys.
+    dict
+        {
+          "dataloaders": {
+             "train": { <dsetA>: DataLoader, <dsetB>: DataLoader },
+             "val":   { ... },
+             "test":  { ... },
+          },
+          # If return_artifacts=True:
+          "DATA": <cleaned DATA>,
+          "Dict_LoA": <intersection/outersection lists>,
+          "Dict_LoA_split": <train/val/test splits of those lists>,
+        }
     """
+    A, B = crossmatch_pair  # e.g., ("DESI_mocks_Raul", "JPAS_x_DESI_Raul")
 
-    logging.info("📦 Starting full data preparation pipeline...")
-
-    # ───────────────────────────────────────────────────── #
-    # 1. Load raw JPAS and DESI datasets
-    # ───────────────────────────────────────────────────── #
-    logging.info("\n\n1️⃣: Loading datasets from disk...")
-    DATA = loading_tools.load_dsets(
+    # 1) Load
+    logging.info("📦 Loading datasets with load_data_bundle()")
+    DATA = loading_tools.load_data_bundle(
         root_path=root_path,
-        datasets_jpas=load_JPAS_data,
-        datasets_desi=load_DESI_data,
-        random_seed=random_seed_load
+        include=include,
+        random_seed=random_seed_load,
+        **dataset_params,  # forwards JPAS_x_DESI_Raul={"datasets":...}, etc.
     )
 
-    # ───────────────────────────────────────────────────── #
-    # 2. Apply cleaning and masking procedures
-    # ───────────────────────────────────────────────────── #
-    logging.info("\n\n2️⃣: Cleaning and masking data...")
-    DATA = cleaning_tools.clean_and_mask_data(
-        DATA=DATA,
-        apply_masks=apply_masks,
-        mask_indices=mask_indices,
-        magic_numbers=magic_numbers,
-        i_band_sn_threshold=i_band_sn_threshold,
-        magnitude_flux_key=magnitude_flux_key,
-        magnitude_threshold=magnitude_threshold,
-        z_lim_QSO_cut=z_lim_QSO_cut,
-        manually_select_one_SPECTYPE_vs_rest=manually_select_one_SPECTYPE_vs_rest
+    # 2) Clean
+    logging.info("🧹 Cleaning datasets with clean_data_pipeline()")
+    DATA = cleaning_tools.clean_data_pipeline(DATA, config=cleaning_config, in_place=True)
+
+    # Validate presence of crossmatch datasets + IDs
+    for ds in (A, B):
+        if ds not in DATA:
+            raise KeyError(f"[wrapper] Dataset '{ds}' not found in DATA (available: {list(DATA.keys())}).")
+        if "all_pd" not in DATA[ds] or id_key not in DATA[ds]["all_pd"]:
+            raise KeyError(f"[wrapper] DATA['{ds}']['all_pd']['{id_key}'] is required for crossmatch.")
+
+    # 3) Crossmatch
+    logging.info(f"🔗 Crossmatching '{A}' vs '{B}' on all_pd['{id_key}']")
+    Dict_LoA = {"intersection": {}, "outersection": {}}
+    _, _, _, \
+    Dict_LoA["outersection"][A], Dict_LoA["outersection"][B], \
+    Dict_LoA["intersection"][A], Dict_LoA["intersection"][B] = crossmatch_tools.crossmatch_IDs_two_datasets(
+        DATA[A]["all_pd"][id_key], DATA[B]["all_pd"][id_key]
     )
 
-    # ───────────────────────────────────────────────────── #
-    # 3. Crossmatch JPAS and DESI using TARGETID
-    # ───────────────────────────────────────────────────── #
-    logging.info("\n\n3️⃣: Crossmatching JPAS and DESI TARGETIDs...")
-    Dict_LoA = {"both": {}, "only": {}}
-    IDs_only_DESI, IDs_only_JPAS, IDs_both, \
-    Dict_LoA["only"]["DESI"], Dict_LoA["only"]["JPAS"], \
-    Dict_LoA["both"]["DESI"], Dict_LoA["both"]["JPAS"] = crossmatch_tools.crossmatch_IDs_two_datasets(
-        DATA["DESI"]['TARGETID'], DATA["JPAS"]['TARGETID']
+    # 4) Split LoAs
+    logging.info("✂️ Splitting LoAs into train/val/test")
+    req_keys = [
+        "train_ratio_intersection", "val_ratio_intersection", "test_ratio_intersection",
+        "random_seed_split_intersection",
+        "train_ratio_outersection", "val_ratio_outersection", "test_ratio_outersection",
+        "random_seed_split_outersection",
+    ]
+    missing = [k for k in req_keys if k not in split_config]
+    if missing:
+        raise KeyError(f"[wrapper] split_config missing keys: {missing}")
+
+    Dict_LoA_split = {"intersection": {}, "outersection": {}}
+
+    # intersection → for B (e.g., JPAS_x_DESI_Raul)
+    Dict_LoA_split["intersection"][B] = process_dset_splits.split_LoA(
+        Dict_LoA["intersection"][B],
+        train_ratio=split_config["train_ratio_intersection"],
+        val_ratio=split_config["val_ratio_intersection"],
+        test_ratio=split_config["test_ratio_intersection"],
+        seed=split_config["random_seed_split_intersection"],
+    )
+    # outersection → for A (e.g., DESI_mocks_Raul)
+    Dict_LoA_split["outersection"][A] = process_dset_splits.split_LoA(
+        Dict_LoA["outersection"][A],
+        train_ratio=split_config["train_ratio_outersection"],
+        val_ratio=split_config["val_ratio_outersection"],
+        test_ratio=split_config["test_ratio_outersection"],
+        seed=split_config["random_seed_split_outersection"],
     )
 
-    # ───────────────────────────────────────────────────── #
-    # 4. Perform train/val/test splits
-    # ───────────────────────────────────────────────────── #
-    logging.info("\n\n4️⃣: Splitting data into train/val/test...")
-    Dict_LoA_split = {"both": {}, "only": {}}
+    # 5) Build DataLoaders  (dataset-first structure)
+    logging.info("🧰 Building DataLoader objects (dataset-first)")
 
-    Dict_LoA_split["both"]["JPAS"] = process_dset_splits.split_LoA(
-        Dict_LoA["both"]["JPAS"], train_ratio_both, val_ratio_both, test_ratio_both, seed=random_seed_split_both
-    )
-    Dict_LoA_split["both"]["DESI"] = process_dset_splits.split_LoA(
-        Dict_LoA["both"]["DESI"], train_ratio_both, val_ratio_both, test_ratio_both, seed=random_seed_split_both
-    )
-    Dict_LoA_split["only"]["DESI"] = process_dset_splits.split_LoA(
-        Dict_LoA["only"]["DESI"], train_ratio_only_DESI, val_ratio_only_DESI, test_ratio_only_DESI, seed=random_seed_split_only_DESI
-    )
+    # Which dataset pulls from which crossmatch bucket
+    extract_dsets = [
+        (A, "outersection"),   # e.g., ("DESI_mocks_Raul", "outersection")
+        (B, "intersection"),   # e.g., ("JPAS_x_DESI_Raul", "intersection")
+    ]
 
-    # ───────────────────────────────────────────────────── #
-    # 5. Create DataLoaders for all training subsets
-    # ───────────────────────────────────────────────────── #
-    logging.info("\n\n5️⃣: Initializing DataLoader objects...")
+    dset_loaders: Dict[str, Dict[str, data_loaders.DataLoader]] = {}
 
-    if define_dataset_loaders_keys is None:
-        define_dataset_loaders_keys = ["DESI_combined", "DESI_only", "DESI_matched", "JPAS_matched"]
-
-    # Ensure the requested dataset keys are valid
-    valid = {"DESI_combined", "DESI_only", "DESI_matched", "JPAS_matched"}
-    bad = set(define_dataset_loaders_keys) - valid
-    if bad:
-        raise ValueError(f"Unknown dataset keys: {bad}")
-
-    # Ensure the requested normalization source is valid
-    if normalization_source_key is not None and normalization_source_key not in define_dataset_loaders_keys:
-        raise ValueError(f"Normalization source '{normalization_source_key}' was requested, "
-                        f"but it is not among the selected loaders: {define_dataset_loaders_keys}")
-
-    # Initialize empty loader dict
-    dset_loaders = {key: {} for key in define_dataset_loaders_keys}
-
-    # ─────────────────────────────────────── #
-    # 5.1 First pass: compute normalization
-    # ─────────────────────────────────────── #
-    if provided_normalization is None and normalization_source_key is not None:
-        logging.info(f"📏 Computing normalization from anchor '{normalization_source_key}' (train only)")
-        key_dset = "train"
-        if normalization_source_key == "DESI_combined":
-            LoA, xx, yy = process_dset_splits.extract_and_combine_DESI_data(
-                Dict_LoA_split["only"]["DESI"][key_dset], Dict_LoA_split["both"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
+    for key_dset, key_xmatch in extract_dsets:
+        dset_loaders.setdefault(key_dset, {})
+        for split_name in ["train", "val", "test"]:
+            LoA_groups = Dict_LoA_split[key_xmatch][key_dset].get(split_name, [])
+            _, xx, yy = process_dset_splits.extract_from_block_by_LoA(
+                block=DATA[key_dset],
+                LoA=LoA_groups,
+                keys_xx=keys_xx,
+                keys_yy=keys_yy,
             )
-        elif normalization_source_key == "DESI_only":
-            LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
-                Dict_LoA_split["only"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
-            )
-        elif normalization_source_key == "DESI_matched":
-            LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
-                Dict_LoA_split["both"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
-            )
-        elif normalization_source_key == "JPAS_matched":
-            LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
-                Dict_LoA_split["both"]["JPAS"][key_dset], DATA["JPAS"], keys_xx, keys_yy
-            )
+            dset_loaders[key_dset][split_name] = data_loaders.DataLoader(xx, yy)
 
-        anchor_loader = data_loaders.DataLoader(xx, yy, normalize=True)
-        provided_normalization = (anchor_loader.means, anchor_loader.stds)
-
-    # ─────────────────────────────────────── #
-    # 5.2 Second pass: build all DataLoaders
-    # ─────────────────────────────────────── #
-    for key_dset in ["train", "val", "test"]:
-        logging.info(f"⚙️ Preparing split: {key_dset}")
-        for key_loader in define_dataset_loaders_keys:
-            logging.info(f"├── {key_loader}")
-            if key_loader == "DESI_combined":
-                LoA, xx, yy = process_dset_splits.extract_and_combine_DESI_data(
-                    Dict_LoA_split["only"]["DESI"][key_dset], Dict_LoA_split["both"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
-                )
-            elif key_loader == "DESI_only":
-                LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
-                    Dict_LoA_split["only"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
-                )
-            elif key_loader == "DESI_matched":
-                LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
-                    Dict_LoA_split["both"]["DESI"][key_dset], DATA["DESI"], keys_xx, keys_yy
-                )
-            elif key_loader == "JPAS_matched":
-                LoA, xx, yy = process_dset_splits.extract_data_using_LoA(
-                    Dict_LoA_split["both"]["JPAS"][key_dset], DATA["JPAS"], keys_xx, keys_yy
-                )
-            dset_loaders[key_loader][key_dset] = data_loaders.DataLoader(
-                xx, yy, normalize=normalize, provided_normalization=provided_normalization
-            )
-
-    logging.info("✅ DataLoader preparation complete.")
-    return dset_loaders
+    result = {"dataloaders": dset_loaders}
+    if return_artifacts:
+        result.update({"DATA": DATA, "Dict_LoA": Dict_LoA, "Dict_LoA_split": Dict_LoA_split})
+    logging.info("✅ Dataloader bundle ready.")
+    return result

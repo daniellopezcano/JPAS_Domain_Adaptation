@@ -54,28 +54,8 @@ def load_and_massage_config_file(config_path, run_name):
     config_0 = copy.deepcopy(config)
 
     # === Data === #
-    path_load = config["models"]["path_load"]
-
-    if path_load is None:
-        config["data"]["provided_normalization"] = None
-    else:
-        path_load = os.path.join(global_setup.path_models, path_load)
-        means, stds = save_load_tools.load_means_stds(path_load)
-        config["data"]["provided_normalization"] = (means, stds)
-
-    if config["data"]["data_paths"] == "default_global_setup":
-        config["data"]["data_paths"] = {
-            "root_path": global_setup.DATA_path,
-            "load_JPAS_data": global_setup.load_JPAS_data,
-            "load_DESI_data": global_setup.load_DESI_data,
-            "random_seed_load": global_setup.default_seed
-        }
-
-    if config["data"]["dict_clean_data_options"] == "default_global_setup":
-        config["data"]["dict_clean_data_options"] = global_setup.dict_clean_data_options
-    
-    if config["data"]["dict_split_data_options"] == "default_global_setup":
-        config["data"]["dict_split_data_options"] = global_setup.dict_split_data_options
+    if config["data"]["cleaning_config"] == "default_global_setup":
+        config["data"]["cleaning_config"] = global_setup.config_dict_cleaning
 
     # === Training === #
     if config["training"]["path_save"] == "default_global_setup":
@@ -84,67 +64,31 @@ def load_and_massage_config_file(config_path, run_name):
     return config_0, config
 
 def wrapper_data_loaders_from_config(dict_data):
-    """
-    Wrapper function to initialize training and validation DataLoaders from a structured config dictionary.
-
-    Parameters
-    ----------
-    dict_data : dict
-        Dictionary containing all required parameters for loading, cleaning, splitting, and formatting data.
-
-    Returns
-    -------
-    dset_train : DataLoader
-        Training DataLoader from the selected survey.
-    dset_val : DataLoader
-        Validation DataLoader from the selected survey.
-    """
+    
     logging.info("📦 Parsing configuration to prepare DataLoaders...")
 
-    # Extract configuration sub-dictionaries
-    data_paths             = dict_data['data_paths']
-    clean_opts             = dict_data['dict_clean_data_options']
-    split_opts             = dict_data['dict_split_data_options']
-    feature_opts           = dict_data['features_labels_options']
-    provided_normalization = dict_data.get('provided_normalization', None)
-    
-    logging.info("🔧 Launching wrapper_data_loaders with loaded configuration...")
-    dset_loaders = wrapper_data_loaders.wrapper_data_loaders(
-        root_path                   = data_paths['root_path'],
-        load_JPAS_data              = data_paths['load_JPAS_data'],
-        load_DESI_data              = data_paths['load_DESI_data'],
-        random_seed_load            = data_paths['random_seed_load'],
-
-        apply_masks                 = clean_opts['apply_masks'],
-        mask_indices                = clean_opts['mask_indices'],
-        magic_numbers               = clean_opts['magic_numbers'],
-        i_band_sn_threshold         = clean_opts['i_band_sn_threshold'],
-        magnitude_flux_key          = clean_opts['magnitude_flux_key'],
-        magnitude_threshold         = clean_opts['magnitude_threshold'],
-        z_lim_QSO_cut               = clean_opts['z_lim_QSO_cut'],
-        manually_select_one_SPECTYPE_vs_rest = clean_opts['manually_select_one_SPECTYPE_vs_rest'],
-
-        train_ratio_both            = split_opts['train_ratio_both'],
-        val_ratio_both              = split_opts['val_ratio_both'],
-        test_ratio_both             = split_opts['test_ratio_both'],
-        random_seed_split_both      = split_opts['random_seed_split_both'],
-
-        train_ratio_only_DESI       = split_opts['train_ratio_only_DESI'],
-        val_ratio_only_DESI         = split_opts['val_ratio_only_DESI'],
-        test_ratio_only_DESI        = split_opts['test_ratio_only_DESI'],
-        random_seed_split_only_DESI = split_opts['random_seed_split_only_DESI'],
-
-        define_dataset_loaders_keys = feature_opts['define_dataset_loaders_keys'],
-        keys_xx                     = feature_opts['keys_xx'],
-        keys_yy                     = feature_opts['keys_yy'],
-        normalization_source_key    = feature_opts['normalization_source_key'],
-        normalize                   = feature_opts['normalize'],
-        provided_normalization      = provided_normalization
+    bundle = wrapper_data_loaders.wrapper_build_dataloaders_current(
+        root_path=global_setup.DATA_path,
+        include=["JPAS_x_DESI_Raul", "DESI_mocks_Raul"],
+        dataset_params={
+            "JPAS_x_DESI_Raul": {"datasets": global_setup.load_JPAS_x_DESI_Raul},
+            "DESI_mocks_Raul":  {"datasets": global_setup.load_DESI_mocks_Raul},
+            "Ignasi":           {"datasets": global_setup.load_Ignasi},  # optional; won't be used in loaders unless you include it in "include"
+        },
+        random_seed_load=global_setup.default_seed,
+        cleaning_config=dict_data["cleaning_config"],
+        crossmatch_pair=("DESI_mocks_Raul", "JPAS_x_DESI_Raul"),
+        id_key="TARGETID",
+        split_config=global_setup.dict_split_data_options,
+        keys_xx=dict_data["keys_xx"],
+        keys_yy=dict_data["keys_yy"],
+        return_artifacts=True,
     )
+    dset_loaders = bundle["dataloaders"]
 
-    key_survey_training = feature_opts["key_survey_training"]
+    key_survey_training = dict_data["key_survey_training"]
     logging.info(f"✅ Returning DataLoaders from training survey key: {key_survey_training}")
-    return dset_loaders[key_survey_training]["train"], dset_loaders[key_survey_training]["val"]
+    return dset_loaders["train"][key_survey_training], dset_loaders["val"][key_survey_training]
 
 def wrapper_define_or_load_models_from_config(input_dim, n_classes, config_models):
     """
@@ -258,7 +202,7 @@ def wrapper_train_from_config(config_path, run_name):
     # 1. Load and process config file
     config_0, config = load_and_massage_config_file(config_path, run_name)
     _ = aux_tools.set_N_threads_(N_threads=config['global']['N_threads'])
-
+    
     # 2. Load data and define data loaders
     dset_train, dset_val = wrapper_data_loaders_from_config(config["data"])
 

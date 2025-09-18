@@ -8,29 +8,16 @@ global:
 # Data Configuration
 # ════════════════════════════════════════════════════════════════════
 data:
-  # ── data_path ──
-  data_paths: default_global_setup
-
-  # ── clean_data_options ──
-  dict_clean_data_options: default_global_setup
-
-  # ── Train/val/test splits ──
-  dict_split_data_options: default_global_setup
-
-  # ── Input/output keys ──
-  features_labels_options:
-    define_dataset_loaders_keys: [DESI_only, JPAS_matched]
-    keys_xx: [OBS, MORPHTYPE_int]
-    keys_yy: [SPECTYPE_int]
-    normalize: true
-    normalization_source_key: DESI_only
-    key_survey_training: JPAS_matched
+  cleaning_config: default_global_setup
+  keys_xx: ["all_observations_normalized","all_errors_normalized","MORPHTYPE_int"]
+  keys_yy: ["SPECTYPE_int"]
+  key_survey_training: JPAS_x_DESI_Raul
 
 # ════════════════════════════════════════════════════════════════════
 # Model Architecture
 # ════════════════════════════════════════════════════════════════════
 models:
-  path_load: wandb_no_DA/my-sweep-0
+  path_load: 09_no_DA
 
 # ════════════════════════════════════════════════════════════════════
 # Training Configuration

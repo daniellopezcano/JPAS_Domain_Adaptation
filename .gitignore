@@ -175,6 +175,7 @@ cython_debug/
 
 # --- Project-specific ---
 SAVED_models/
+SAVED_FIGURES/
 DATA/
 notebooks/wandb
 *.autosave.ipynb

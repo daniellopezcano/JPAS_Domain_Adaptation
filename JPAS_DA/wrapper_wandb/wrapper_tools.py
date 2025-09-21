@@ -67,7 +67,7 @@ def wrapper_data_loaders_from_config(dict_data):
     
     logging.info("📦 Parsing configuration to prepare DataLoaders...")
 
-    bundle = wrapper_data_loaders.wrapper_build_dataloaders_current(
+    bundle = wrapper_data_loaders.wrapper_build_dataloaders(
         root_path=global_setup.DATA_path,
         include=["JPAS_x_DESI_Raul", "DESI_mocks_Raul"],
         dataset_params={
@@ -88,7 +88,7 @@ def wrapper_data_loaders_from_config(dict_data):
 
     key_survey_training = dict_data["key_survey_training"]
     logging.info(f"✅ Returning DataLoaders from training survey key: {key_survey_training}")
-    return dset_loaders["train"][key_survey_training], dset_loaders["val"][key_survey_training]
+    return dset_loaders[key_survey_training]["train"], dset_loaders[key_survey_training]["val"]
 
 def wrapper_define_or_load_models_from_config(input_dim, n_classes, config_models):
     """
@@ -160,7 +160,8 @@ def wrapper_train_routine_from_config(dset_train, dset_val, model_encoder, confi
     
     loss_function_dict = {
         "type": "CrossEntropyLoss",
-        "sampling_strategy": config_training["sampling_strategy"]
+        "sampling_strategy": config_training["sampling_strategy"],
+        "l2_lambda": config_training["l2_lambda"]
     }
     if config_training["sampling_strategy"] == "true_random":
         counts = dset_train.class_counts

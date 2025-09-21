@@ -6,26 +6,61 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 
-def cross_entropy(yy_true, yy_pred, class_weights=None):
-    """
-    Computes cross-entropy loss between true and predicted labels.
+import torch
+import torch.nn as nn
 
-    Parameters:
-    - yy_true (torch.Tensor): True labels.
-    - yy_pred (torch.Tensor): Predicted labels.
-    - class_weights (torch.Tensor, optional): Class weights.
+def cross_entropy(
+    yy_true: torch.Tensor,
+    yy_pred: torch.Tensor,
+    class_weights: torch.Tensor = None,
+    *,
+    parameters=None,            # e.g., model.parameters()
+    l2_lambda: float = 0.0,     # weight for L2 (ridge) regularization
+    l1_lambda: float = 0.0,     # weight for L1 (lasso) regularization
+    exclude_bias: bool = True   # skip 1D params (bias/BN) in regularization
+) -> torch.Tensor:
+    """
+    Cross-entropy with optional L1/L2 regularization on model parameters.
+
+    Args:
+        yy_true: Long tensor of shape (N,) with class indices.
+        yy_pred: Float tensor of shape (N, C) with **logits** (not softmax).
+        class_weights: Optional tensor of shape (C,) with per-class weights.
+        parameters: Iterable of tensors to regularize (e.g., model.parameters()).
+        l2_lambda: Coefficient for L2 penalty (sum of squares).
+        l1_lambda: Coefficient for L1 penalty (sum of absolute values).
+        exclude_bias: If True, skip parameters with ndim == 1.
 
     Returns:
-    - torch.Tensor: Cross-entropy loss.
+        Scalar loss tensor.
     """
     if class_weights is not None:
-        loss_function = torch.nn.CrossEntropyLoss(weight=class_weights)
-        loss = loss_function(yy_pred, yy_true)
-        return loss
-    else:
-        loss_function = torch.nn.CrossEntropyLoss()
-        loss = loss_function(yy_pred, yy_true)
-        return loss
+        class_weights = class_weights.to(yy_pred.device)
+
+    loss_fn = nn.CrossEntropyLoss(weight=class_weights)
+    loss = loss_fn(yy_pred, yy_true)
+
+    # Add regularization if requested and parameters are provided
+    if (l1_lambda > 0.0 or l2_lambda > 0.0) and parameters is not None:
+        # Accept either a model or an iterable of tensors
+        if hasattr(parameters, "parameters"):  # a nn.Module
+            params_iter = parameters.parameters()
+        else:
+            params_iter = parameters
+
+        reg = torch.zeros((), device=yy_pred.device, dtype=loss.dtype)
+        for p in params_iter:
+            if p is None or (not p.requires_grad):
+                continue
+            if exclude_bias and p.ndim == 1:
+                continue
+            if l2_lambda > 0.0:
+                reg = reg + l2_lambda * torch.sum(p.pow(2))
+            if l1_lambda > 0.0:
+                reg = reg + l1_lambda * torch.sum(p.abs())
+        loss = loss + reg
+
+    return loss
 
 def weinberger_loss(yy, delta_pull=0.5, delta_push=1.5, c_pull=1., c_push=1., c_reg=0.001, _epsilon=1e-8, save_plots_path=None):
     """

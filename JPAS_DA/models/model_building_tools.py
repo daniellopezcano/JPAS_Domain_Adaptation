@@ -1,7 +1,7 @@
 from torch import nn
 
 def create_mlp(input_dim, hidden_layers, output_dim, dropout_rates=None, *,
-               use_batchnorm=True,
+               use_batchnorm=False,
                use_layernorm_at_output=False,
                init_method='xavier'):
     """

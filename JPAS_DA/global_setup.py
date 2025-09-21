@@ -27,6 +27,7 @@ main_path = os.path.join("/home/dlopez/Documentos/0.profesional/Postdoc/USP/Proj
 DATA_path = os.path.join(main_path, "DATA")
 path_models = os.path.join(main_path, "SAVED_models")
 path_configs = os.path.join(main_path, "configs")
+path_saved_figures = os.path.join(main_path, "SAVED_FIGURES")
 
 # ----------------------------
 # Reproducibility
@@ -133,9 +134,9 @@ config_dict_cleaning = {
         "enabled": True,
         "shared_mappings": {
             "SPECTYPE":  {
-                'GALAXY': 0,
+                "QSO_high": 0,
                 "QSO_low": 1,
-                "QSO_high": 2,
+                'GALAXY': 2,               
                 'STAR': 3
             },
             "MORPHTYPE": {

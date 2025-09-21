@@ -9,7 +9,7 @@ global:
 # ════════════════════════════════════════════════════════════════════
 data:
   cleaning_config: default_global_setup
-  keys_xx: ["all_observations_normalized","all_errors_normalized","MORPHTYPE_int"]
+  keys_xx: ["all_observations_normalized", "MORPHTYPE_int"]
   keys_yy: ["SPECTYPE_int"]
   key_survey_training: JPAS_x_DESI_Raul
 
@@ -28,17 +28,18 @@ training:
   
   sampling_strategy: true_random
   freeze_downstream_model: True
+  l2_lambda: 0.0005
   
   NN_epochs: 1024
-  NN_batches_per_epoch: 4096
+  NN_batches_per_epoch: 16
   batch_size: 4096
   batch_size_val: null
 
-  lr: 0.0002
+  lr: 0.00001
   weight_decay: 0.0001
   clip_grad_norm: 10.0
 
   seed_mode: deterministic
-  seed: 140
+  seed: 137
 
   device: cuda

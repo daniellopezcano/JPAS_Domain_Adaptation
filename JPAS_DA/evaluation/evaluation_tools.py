@@ -5,6 +5,8 @@ import torch
 from copy import deepcopy
 import os
 import sys
+import re
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -13,12 +15,11 @@ from matplotlib.lines import Line2D
 
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
+from sklearn.manifold import TSNE
 
 from scipy.stats import binned_statistic_2d
 from scipy.ndimage import gaussian_filter
 from scipy.stats import gaussian_kde
-
-from sklearn.metrics import roc_curve
 from scipy.interpolate import interp1d
 
 from JPAS_DA import global_setup
@@ -27,6 +28,655 @@ from JPAS_DA.models import model_building_tools
 from JPAS_DA.training import save_load_tools
 from JPAS_DA.wrapper_wandb import wrapper_tools
 from JPAS_DA.utils.plotting_utils import get_N_colors
+
+from typing import Dict, Optional, Any
+
+def tsne_per_key(
+    features: Dict[str, np.ndarray],
+    *,
+    standardize: bool = False,
+    subsample: Optional[Dict[str, int]] = None,   # e.g. {"A": 2000, "B": 2000}
+    random_state: int = 42,
+    tsne_kwargs: Optional[Dict[str, Any]] = None,
+    return_all_key: Optional[str] = None,         # e.g. "ALL_tSNE" to also store the stacked embedding
+) -> Dict[str, np.ndarray]:
+    """
+    Compute a single shared 2D t-SNE embedding for all arrays in `features`,
+    then split back and return a dict with the same keys plus "<key>_tSNE".
+
+    Parameters
+    ----------
+    features : dict[str, ndarray]
+        Each value must be a 2D array (N_i, D).
+    standardize : bool
+        If True, z-score the stacked features column-wise before t-SNE.
+    subsample : dict[str, int], optional
+        If provided, randomly keep only `n` rows for the given key before stacking.
+    random_state : int
+        RNG seed for reproducibility.
+    tsne_kwargs : dict
+        Extra kwargs forwarded to sklearn.manifold.TSNE.
+    return_all_key : str or None
+        If not None, also store the full stacked embedding under this key.
+
+    Returns
+    -------
+    out : dict[str, ndarray]
+        Original items are preserved. For each input key `k`, an additional
+        key `f"{k}_tSNE"` with shape (N_k_used, 2) is added. If `return_all_key`
+        is set, an extra (N_total_used, 2) array is included under that name.
+    """
+    if not features:
+        raise ValueError("`features` is empty.")
+
+    # Keep insertion order of dict
+    keys = list(features.keys())
+    rng = np.random.RandomState(random_state)
+
+    # Validate shapes + optional subsample
+    per_key_arrays = []
+    counts = []
+    kept_indices = {}  # map key -> indices kept (within that key)
+
+    for k in keys:
+        X = np.asarray(features[k])
+        if X.ndim != 2:
+            raise ValueError(f"Value for key '{k}' must be 2D, got shape {X.shape}.")
+
+        if subsample and k in subsample and subsample[k] < X.shape[0]:
+            idx = rng.choice(X.shape[0], size=int(subsample[k]), replace=False)
+            X = X[idx]
+            kept_indices[k] = idx
+        else:
+            kept_indices[k] = np.arange(X.shape[0])
+
+        per_key_arrays.append(X)
+        counts.append(X.shape[0])
+
+    # Stack
+    X_all = np.vstack(per_key_arrays)
+
+    # Optional standardization
+    if standardize:
+        mu = X_all.mean(axis=0, keepdims=True)
+        sigma = X_all.std(axis=0, keepdims=True)
+        sigma[sigma == 0.0] = 1.0
+        X_all = (X_all - mu) / sigma
+
+    # Prepare t-SNE kwargs with safe defaults
+    n_total = X_all.shape[0]
+    base = dict(
+        n_components=2,
+        init="pca",
+        learning_rate="auto",
+        random_state=random_state,
+        perplexity=min(100, max(5, (n_total - 1) // 3)),  # must be < n_samples
+        verbose=1,
+    )
+    if tsne_kwargs:
+        base.update(tsne_kwargs)
+        # Clamp perplexity to a valid value
+        base["perplexity"] = min(base.get("perplexity", base["perplexity"]),
+                                 max(5, n_total - 1))
+
+    logging.info(f"t-SNE on N={n_total} (perplexity={base['perplexity']})...")
+    X_all_emb = TSNE(**base).fit_transform(X_all)
+
+    # Split back
+    out = dict(features)  # keep original entries
+    start = 0
+    for k, c in zip(keys, counts):
+        end = start + c
+        out[f"{k}_tSNE"] = X_all_emb[start:end]
+        start = end
+
+    if return_all_key:
+        out[return_all_key] = X_all_emb
+
+    # Optionally, you could also return kept_indices if you need to map back
+    return out
+
+def plot_overall_deltaF1_two_comparisons(
+    y_true_src,              # DESI_mocks_Raul test labels
+    y_pred_src_noDA,         # probs no-DA on source test
+    y_true_tgt,              # JPAS_x_DESI_Raul test labels
+    y_pred_tgt_noDA,         # probs no-DA on target test
+    y_pred_tgt_DA,           # probs DA on target test
+    class_names,
+    *,
+    title="ΔF1 per class (overall)",
+    colors=("royalblue", "darkorange"),           # (Target no-DA − Source no-DA, Target DA − Target no-DA)
+    labels=("Target no-DA − Source no-DA", "Target DA − Target no-DA"),
+    figsize=(11, 6),
+    ylim=(-0.5, 0.5),
+    alpha=0.9,
+    edgecolor="black",
+    bar_width=0.36,
+    legend_kwargs=None,                            # e.g. {"loc":"upper right", "frameon":True}
+    show=True,
+    save_dir=None, save_format="png", save_dpi=200, filename="deltaF1_overall_combined"
+):
+    """
+    One grouped-bar figure with two bars per class:
+      - ΔF1_1 = F1(Target no-DA) − F1(Source no-DA)
+      - ΔF1_2 = F1(Target DA)    − F1(Target no-DA)
+    """
+    n_classes = len(class_names)
+
+    def _f1_per_class(y_true, y_pred_probs):
+        if len(y_true) == 0:
+            return np.zeros(n_classes, dtype=float)
+        y_pred = np.argmax(y_pred_probs, axis=1)
+        return f1_score(y_true, y_pred, labels=np.arange(n_classes), average=None, zero_division=0)
+
+    # --- Compute per-class F1s
+    f1_src_noDA = _f1_per_class(y_true_src,  y_pred_src_noDA)
+    f1_tgt_noDA = _f1_per_class(y_true_tgt,  y_pred_tgt_noDA)
+    f1_tgt_DA   = _f1_per_class(y_true_tgt,  y_pred_tgt_DA)
+
+    # --- Deltas with your convention
+    delta_target_noDA_minus_source_noDA = f1_tgt_noDA - f1_src_noDA
+    delta_target_DA_minus_target_noDA   = f1_tgt_DA   - f1_tgt_noDA
+
+    # --- Plot
+    x = np.arange(n_classes)
+    fig, ax = plt.subplots(figsize=figsize)
+
+    ax.bar(x - bar_width/2, delta_target_noDA_minus_source_noDA, width=bar_width,
+           color=colors[0], alpha=alpha, edgecolor=edgecolor, label=labels[0])
+    ax.bar(x + bar_width/2, delta_target_DA_minus_target_noDA, width=bar_width,
+           color=colors[1], alpha=alpha, edgecolor=edgecolor, label=labels[1])
+
+    ax.axhline(0.0, color="black", linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels(class_names, rotation=20, ha="right")
+    ax.set_ylabel("ΔF1")
+    ax.set_xlabel("Class")
+    ax.set_title(title)
+    ax.set_ylim(*ylim)
+    if legend_kwargs is None:
+        legend_kwargs = {"loc": "upper right", "frameon": True}
+    ax.legend(**legend_kwargs)
+
+    ax.grid(axis="y", linestyle=":", alpha=0.4)
+    fig.tight_layout()
+
+    # Save if requested
+    if save_dir is not None:
+        Path(save_dir).mkdir(parents=True, exist_ok=True)
+        out_path = Path(save_dir) / f"{filename}.{save_format}"
+        fig.savefig(out_path, dpi=save_dpi, bbox_inches="tight")
+
+    if show:
+        plt.show()
+
+    return fig, ax
+
+def radar_plot(
+    dict_radar: dict,
+    class_names,
+    *,
+    title: str = None,
+    title_pad: float = 20,            # optional title padding
+    figsize=(10, 10),
+    theta_offset=np.pi/2,
+    theta_direction=-1,
+    r_ticks=(0.2, 0.4, 0.6, 0.8, 1.0),
+    r_lim=(0.0, 1.0),
+    tick_labelsize=14,
+    radial_labelsize=12,
+    linewidth_default=2.0,
+    show_legend=True,
+    legend_kwargs=None,
+    close_line=True,
+):
+    """
+    Flexible radar-plot for per-class F1 scores across multiple cases.
+    - Class tick labels are rotated tangentially.
+    - Accepts 'marker' and 'markersize' in each case's plot_kwargs to draw a
+      scatter marker at each class vertex (in addition to the connecting line).
+    """
+    class_names = list(class_names)
+    C = len(class_names)
+    labels_range = np.arange(C)
+
+    # Angles per class; duplicate first for closure if requested
+    angles = np.linspace(0, 2*np.pi, C, endpoint=False).tolist()
+    if close_line:
+        angles_closed = angles + angles[:1]
+    else:
+        angles_closed = angles
+
+    fig, ax = plt.subplots(figsize=figsize, subplot_kw=dict(polar=True))
+    ax.set_theta_offset(theta_offset)
+    ax.set_theta_direction(theta_direction)
+
+    # Set tick positions/labels
+    tick_angles = angles  # unclosed positions for class ticks
+    tick_degs = np.degrees(tick_angles)
+    ax.set_thetagrids(tick_degs, class_names, fontsize=tick_labelsize)
+
+    ax.set_ylim(*r_lim)
+    ax.set_yticks(r_ticks)
+    ax.set_yticklabels([str(v) for v in r_ticks], fontsize=radial_labelsize)
+    ax.grid(True, alpha=0.3)
+
+    handles = []
+
+    for case_name, payload in dict_radar.items():
+        y_true = np.asarray(payload["y_true"])
+        y_pred = np.asarray(payload["y_pred"])
+
+        # Predicted class indices
+        if y_pred.ndim == 2:
+            if y_pred.shape[1] != C:
+                raise ValueError(f"For '{case_name}', y_pred has {y_pred.shape[1]} columns but len(class_names)={C}.")
+            y_hat = np.argmax(y_pred, axis=1)
+        elif y_pred.ndim == 1:
+            y_hat = y_pred
+        else:
+            raise ValueError(f"For '{case_name}', y_pred must be 1D or 2D; got shape {y_pred.shape}.")
+
+        # Per-class F1 in fixed order 0..C-1
+        f1 = f1_score(y_true, y_hat, average=None, labels=labels_range, zero_division=0)
+        f1_closed = (f1.tolist() + [f1[0]]) if close_line else f1.tolist()
+
+        # Style (support alias "linstyle")
+        pk = dict(payload.get("plot_kwargs", {}))
+        if "linstyle" in pk and "linestyle" not in pk:
+            pk["linestyle"] = pk.pop("linstyle")
+        pk.setdefault("linewidth", linewidth_default)
+        pk.setdefault("label", case_name)
+
+        color = pk.get("color", None)
+        marker = pk.get("marker", None)
+        markersize = float(pk.get("markersize", 8.0))  # points
+        alpha = pk.get("alpha", 1.0)
+
+        # Line
+        line = ax.plot(angles_closed, f1_closed, **pk)[0]
+        handles.append(line)
+
+        # --- NEW: scatter markers at vertices (per class) ---
+        # Use unclosed angles and raw f1 values to avoid duplicate first point.
+        if marker is None:
+            # If no marker specified, still draw a subtle vertex marker for readability?
+            # Uncomment next line to always show default markers:
+            # marker = "o"
+            pass
+        if marker is not None:
+            # matplotlib.scatter uses size in points^2
+            s = markersize ** 2
+            mfc = pk.get("markerfacecolor", color)
+            mec = pk.get("markeredgecolor", color)
+            mew = pk.get("markeredgewidth", 1.0)
+            ax.scatter(
+                tick_angles, f1,
+                s=s, marker=marker,
+                facecolors=mfc if mfc is not None else "none",
+                edgecolors=mec if mec is not None else color,
+                linewidths=mew,
+                alpha=alpha,
+                zorder=5,
+                label="_nolegend_",  # avoid duplicate legend entries
+            )
+
+    # ---- Rotate class-name tick labels tangentially to the circle ----
+    offset_deg = np.degrees(theta_offset)
+    tick_labels = ax.get_xticklabels()
+    for lbl, base_deg in zip(tick_labels, tick_degs):
+        ang_disp = (base_deg * theta_direction + offset_deg) % 360.0
+        # Tangential rotation with left/right alignment to keep text upright
+        if 90.0 < ang_disp < 270.0:
+            rotation = ang_disp + 180.0
+            ha = "right"
+        else:
+            rotation = ang_disp
+            ha = "left"
+        lbl.set_rotation(rotation)
+        lbl.set_rotation_mode("anchor")
+        lbl.set_horizontalalignment(ha)
+        lbl.set_verticalalignment("center")
+
+    # Title / legend
+    if title:
+        ax.set_title(title, pad=title_pad, fontsize=16)
+    if show_legend:
+        legend_kwargs = legend_kwargs or {}
+        ax.legend(handles=handles, **legend_kwargs)
+
+    plt.tight_layout()
+    return fig, ax
+
+def evaluate_all_plots_by_mag_bins(
+    masks_magnitudes: dict,
+    yy: dict,
+    probs: dict,
+    class_names,
+    *,
+    dict_radar_styles: dict = None,   # template dict to copy plot_kwargs (values under ['plot_kwargs'])
+    radar_title_base: str = "F1 Radar Plot",
+    radar_kwargs: dict = None,        # forwarded to radar_plot
+    colors=None,                      # e.g., ['blue','green','orange','red']  (per-bin color)
+    colormaps=None,                   # e.g., [plt.cm.Blues, plt.cm.Greens, plt.cm.YlOrBr, plt.cm.Reds] (per-bin cmap)
+    show: bool = True,
+    # ------- saving controls -------
+    save_dir: str = None,             # folder to save figures; if None, don't save
+    save_format: str = "png",
+    save_dpi: int = 200,
+    close_after_save: bool = False,   # close figs after saving (useful when show=False in loops)
+):
+    """
+    Per magnitude bin:
+      - Confusion matrices for:
+          * no-DA Source-Test (Mocks)
+          * no-DA Target-Test (JPAS x DESI)
+          * DA   Target-Test (JPAS x DESI)
+      - Radar plot for the 3 cases above (all lines use the bin's color; styles differentiate cases)
+      - Two set-performance comparisons (both use the bin's color):
+          * Source no-DA (Mocks Test) vs Target no-DA (JPAS Test)
+          * Target no-DA (JPAS Test) vs DA (JPAS Test)
+
+    NEW (combined):
+      - One combined radar plot overlaying all magnitude bins (color-coded by bin)
+      - Two combined ΔF1 histograms (one per comparison), grouped by class with one bar per bin.
+
+    DA-Train plots and TPR comparison are intentionally omitted.
+    """
+    # ---------------- helpers ----------------
+    def _bin_tag(lo, hi):
+        fmt = lambda v: str(v).replace('.', 'p')
+        return f"mag_{fmt(lo)}-{fmt(hi)}"
+
+    def _sanitize(name):
+        return re.sub(r"[^A-Za-z0-9._\-]+", "_", name)
+
+    def _save_current(fig, filename):
+        if not save_dir:
+            return
+        out_dir = Path(save_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        fpath = out_dir / filename
+        fig.savefig(fpath, dpi=save_dpi, bbox_inches="tight")
+
+    def _f1_per_class(y_true, y_pred_probs, n_classes):
+        if len(y_true) == 0:
+            return np.zeros(n_classes, dtype=float)
+        y_pred = np.argmax(y_pred_probs, axis=1)
+        return f1_score(y_true, y_pred, labels=np.arange(n_classes), average=None, zero_division=0)
+
+    def _plot_combined_deltaF1_hist(delta_by_bin: dict, *, title: str, colors_for_bins: list,
+                                    class_names: list, ylim=(-0.5, 0.5), figsize=(11, 6)):
+        """
+        delta_by_bin: dict {bin_label: np.ndarray(n_classes,)}
+        One grouped bar chart: per class, bars for each bin (colored by bin color).
+        """
+        bins_list = list(delta_by_bin.keys())
+        B = len(bins_list)
+        C = len(class_names)
+        x = np.arange(C)
+        width = 0.8 / max(B, 1)  # pack bars within class group
+
+        fig, ax = plt.subplots(figsize=figsize)
+        for b_idx, bin_lbl in enumerate(bins_list):
+            deltas = delta_by_bin[bin_lbl]
+            # offset within the class group
+            offset = (b_idx - (B - 1) / 2) * width
+            ax.bar(x + offset, deltas, width=width, color=colors_for_bins[b_idx % len(colors_for_bins)],
+                   edgecolor="black", alpha=0.85, label=bin_lbl)
+
+        ax.axhline(0.0, color="black", linewidth=1)
+        ax.set_xticks(x)
+        ax.set_xticklabels(class_names, rotation=20, ha="right")
+        ax.set_ylabel("ΔF1")
+        ax.set_xlabel("Class")
+        ax.set_title(title)
+        ax.set_ylim(*ylim)
+        ax.legend(title="Magnitude bins", ncol=B, fontsize=9, frameon=True)
+        fig.tight_layout()
+        return fig, ax
+
+    # -----------------------------------------
+    if colors is None:
+        colors = ['blue', 'green', 'orange', 'red']
+    if colormaps is None:
+        colormaps = [plt.cm.Blues, plt.cm.Greens, plt.cm.YlOrBr, plt.cm.Reds]
+
+    required_entries = [
+        ("Mocks", "Test"),
+        ("JPAS x DESI", "Test"),
+        ("JPAS x DESI", "Train"),  # only to align available bins; not plotted
+    ]
+
+    # Intersect bins across required entries
+    bins_sets = []
+    for entry in required_entries:
+        entry_bins = [k for k in masks_magnitudes.get(entry, {}).keys() if isinstance(k, tuple) and len(k) == 2]
+        if not entry_bins:
+            print(f"[WARN] No bins found for entry {entry}; skipping all.")
+            return
+        bins_sets.append(set(entry_bins))
+    common_bins = sorted(set.intersection(*bins_sets), key=lambda x: (x[0], x[1]))
+    if not common_bins:
+        print("[WARN] No common magnitude bins across required entries.")
+        return
+
+    # Pull plot styles (if provided) for radar lines
+    styles = {}
+    if dict_radar_styles is not None:
+        for key, spec in dict_radar_styles.items():
+            if "plot_kwargs" in spec:
+                styles[key] = dict(spec["plot_kwargs"])  # copy
+
+    # Defaults if not provided
+    styles.setdefault("Source-Test (Mocks) no-DA", {
+        "linestyle": "--", "linewidth": 2.0, "color": "orange",
+        "marker": "+", "markersize": 8.0, "label": "Source-Test (Mocks) no-DA"
+    })
+    styles.setdefault("Target-Test (JPAS x DESI) no-DA", {
+        "linestyle": "-.", "linewidth": 2.0, "color": "crimson",
+        "marker": "x", "markersize": 8.0, "label": "Target-Test (JPAS x DESI) no-DA"
+    })
+    styles.setdefault("Target-Test (JPAS x DESI) DA", {
+        "linestyle": "-", "linewidth": 2.0, "color": "limegreen",
+        "marker": "o", "markersize": 8.0, "label": "Target-Test (JPAS x DESI) DA"
+    })
+
+    # Defaults for radar kwargs (can be overridden via radar_kwargs)
+    _radar_kwargs = dict(
+        figsize=(8, 8),
+        theta_offset=np.pi / 2,
+        r_ticks=(0.1, 0.3, 0.5, 0.7, 0.9),
+        r_lim=(0.0, 1.0),
+        tick_labelsize=16,
+        radial_labelsize=12,
+        show_legend=True,
+        legend_kwargs={
+            "loc": "upper left", "bbox_to_anchor": (0.73, 1.0), "fontsize": 9, "ncol": 1,
+            "title": "Evaluation Cases", "frameon": True, "fancybox": True,
+            "shadow": True, "borderaxespad": 0.0,
+        },
+        title_pad=20,
+    )
+    if radar_kwargs:
+        _radar_kwargs.update(radar_kwargs)
+
+    # === COMBINED ACCUMULATORS ===
+    # 1) Combined radar: build a giant dict_radar with entries (case×bin) each colored by the bin color.
+    dict_radar_combined = {}
+
+    # 2) Combined ΔF1 per comparison, per bin
+    delta_tgt_vs_src_noDA_by_bin = {}  # bin_label -> (n_classes,)
+    delta_tgt_DA_vs_noDA_by_bin = {}   # bin_label -> (n_classes,)
+
+    n_classes = len(class_names)
+
+    for bin_idx, (lo, hi) in enumerate(common_bins):
+        bin_label = f"({lo}, {hi}]"
+        tag = _bin_tag(lo, hi)
+        print(f"\n=== Magnitude bin {bin_label} ===")
+
+        # Per-bin color/cmap
+        color_this_bin = colors[bin_idx % len(colors)]
+        cmap_this_bin  = colormaps[bin_idx % len(colormaps)]
+
+        # --- Masks ---
+        m_mocks_test = masks_magnitudes[("Mocks", "Test")][(lo, hi)]
+        m_jpas_test  = masks_magnitudes[("JPAS x DESI", "Test")][(lo, hi)]
+
+        # --- Slices ---
+        y_true_src = yy["DESI_mocks_Raul"]["test"]["SPECTYPE_int"][m_mocks_test]
+        y_pred_src_noDA = probs["no-DA"]["DESI_mocks_Raul"]["test"][m_mocks_test]
+
+        y_true_tgt_test = yy["JPAS_x_DESI_Raul"]["test"]["SPECTYPE_int"][m_jpas_test]
+        y_pred_tgt_test_noDA = probs["no-DA"]["JPAS_x_DESI_Raul"]["test"][m_jpas_test]
+        y_pred_tgt_test_DA = probs["DA"]["JPAS_x_DESI_Raul"]["test"][m_jpas_test]
+
+        def _nonempty(*arrs):
+            return all(len(a) > 0 for a in arrs)
+
+        # --- Confusion matrices (3) ---
+        if _nonempty(y_true_src, y_pred_src_noDA):
+            res = plot_confusion_matrix(
+                y_true_src, y_pred_src_noDA,
+                class_names=class_names, cmap=cmap_this_bin,
+                title=f"no-DA Source-Test (Mocks)  {bin_label}"
+            )
+            fig_cm = res[0] if (isinstance(res, tuple) and hasattr(res[0], "savefig")) else (res if hasattr(res, "savefig") else plt.gcf())
+            _save_current(fig_cm, _sanitize(f"cm_noDA_Source-Test_Mocks_{tag}.{save_format}"))
+            if close_after_save and save_dir: plt.close(fig_cm)
+
+        if _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA):
+            res = plot_confusion_matrix(
+                y_true_tgt_test, y_pred_tgt_test_noDA,
+                class_names=class_names, cmap=cmap_this_bin,
+                title=f"no-DA Target-Test (JPAS x DESI)  {bin_label}"
+            )
+            fig_cm = res[0] if (isinstance(res, tuple) and hasattr(res[0], "savefig")) else (res if hasattr(res, "savefig") else plt.gcf())
+            _save_current(fig_cm, _sanitize(f"cm_noDA_Target-Test_JPASxDESI_{tag}.{save_format}"))
+            if close_after_save and save_dir: plt.close(fig_cm)
+
+        if _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
+            res = plot_confusion_matrix(
+                y_true_tgt_test, y_pred_tgt_test_DA,
+                class_names=class_names, cmap=cmap_this_bin,
+                title=f"DA Target-Test (JPAS x DESI)  {bin_label}"
+            )
+            fig_cm = res[0] if (isinstance(res, tuple) and hasattr(res[0], "savefig")) else (res if hasattr(res, "savefig") else plt.gcf())
+            _save_current(fig_cm, _sanitize(f"cm_DA_Target-Test_JPASxDESI_{tag}.{save_format}"))
+            if close_after_save and save_dir: plt.close(fig_cm)
+
+        # --- Per-bin radar (as before) ---
+        dict_radar_bin = {
+            "Source-Test (Mocks) no-DA": {
+                "y_true": y_true_src,
+                "y_pred": y_pred_src_noDA,
+                "plot_kwargs": {**styles["Source-Test (Mocks) no-DA"], "color": color_this_bin},
+            },
+            "Target-Test (JPAS x DESI) no-DA": {
+                "y_true": y_true_tgt_test,
+                "y_pred": y_pred_tgt_test_noDA,
+                "plot_kwargs": {**styles["Target-Test (JPAS x DESI) no-DA"], "color": color_this_bin},
+            },
+            "Target-Test (JPAS x DESI) DA": {
+                "y_true": y_true_tgt_test,
+                "y_pred": y_pred_tgt_test_DA,
+                "plot_kwargs": {**styles["Target-Test (JPAS x DESI) DA"], "color": color_this_bin},
+            },
+        }
+        if any(len(v["y_true"]) > 0 for v in dict_radar_bin.values()):
+            fig_radar, ax_radar = radar_plot(
+                dict_radar=dict_radar_bin,
+                class_names=class_names,
+                title=f"{radar_title_base}  {bin_label}",
+                **_radar_kwargs,
+            )
+            _save_current(fig_radar, _sanitize(f"radar_{tag}.{save_format}"))
+            if close_after_save and save_dir: plt.close(fig_radar)
+
+        # --- Accumulate for COMBINED radar: split into (case×bin) items ---
+        # Keep linestyles by case, override color by bin, and append bin tag to label.
+        for case_key in ("Source-Test (Mocks) no-DA",
+                         "Target-Test (JPAS x DESI) no-DA",
+                         "Target-Test (JPAS x DESI) DA"):
+            if case_key == "Source-Test (Mocks) no-DA" and _nonempty(y_true_src, y_pred_src_noDA):
+                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
+                    "y_true": y_true_src,
+                    "y_pred": y_pred_src_noDA,
+                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
+                }
+            elif case_key == "Target-Test (JPAS x DESI) no-DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA):
+                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
+                    "y_true": y_true_tgt_test,
+                    "y_pred": y_pred_tgt_test_noDA,
+                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
+                }
+            elif case_key == "Target-Test (JPAS x DESI) DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
+                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
+                    "y_true": y_true_tgt_test,
+                    "y_pred": y_pred_tgt_test_DA,
+                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
+                }
+
+        # --- Compute ΔF1 per bin for the two comparisons ---
+        if _nonempty(y_true_src, y_pred_src_noDA) and _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA):
+            f1_src_noDA = _f1_per_class(y_true_src, y_pred_src_noDA, n_classes)
+            f1_tgt_noDA = _f1_per_class(y_true_tgt_test, y_pred_tgt_test_noDA, n_classes)
+            delta_tgt_vs_src_noDA_by_bin[bin_label] = f1_tgt_noDA - f1_src_noDA
+
+        if _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA) and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
+            f1_tgt_noDA = _f1_per_class(y_true_tgt_test, y_pred_tgt_test_noDA, n_classes)
+            f1_tgt_DA   = _f1_per_class(y_true_tgt_test, y_pred_tgt_test_DA, n_classes)
+            delta_tgt_DA_vs_noDA_by_bin[bin_label] = f1_tgt_DA - f1_tgt_noDA
+
+        if show and not close_after_save:
+            plt.show()
+
+    # ================== COMBINED PLOTS ==================
+
+    # --- Combined radar over all bins ---
+    if dict_radar_combined:
+        fig_cr, ax_cr = radar_plot(
+            dict_radar=dict_radar_combined,
+            class_names=class_names,
+            title=f"{radar_title_base} — Combined bins",
+            **_radar_kwargs,
+        )
+        _save_current(fig_cr, _sanitize(f"radar_combined.{save_format}"))
+        if close_after_save and save_dir: plt.close(fig_cr)
+
+    # --- Combined ΔF1 histograms ---
+    # Colors per bin in order of bins encountered in the dict
+    def _colors_for_bins(delta_dict):
+        bins_list = list(delta_dict.keys())
+        return [colors[common_bins.index(tuple(map(float, b.strip("()").split(", ")))) % len(colors)]
+                if isinstance(b, str) and ", " in b
+                else colors[i % len(colors)]
+                for i, b in enumerate(bins_list)]
+
+    if delta_tgt_vs_src_noDA_by_bin:
+        bins_colors = [colors[i % len(colors)] for i in range(len(delta_tgt_vs_src_noDA_by_bin))]
+        fig_d1, ax_d1 = _plot_combined_deltaF1_hist(
+            delta_tgt_vs_src_noDA_by_bin,
+            title="Target no-DA vs Source no-DA",
+            colors_for_bins=bins_colors,
+            class_names=class_names,
+            ylim=(-0.78, 0.15),
+        )
+        _save_current(fig_d1, _sanitize(f"deltaF1_Source_vs_Target_noDA_combined.{save_format}"))
+        if close_after_save and save_dir: plt.close(fig_d1)
+
+    if delta_tgt_DA_vs_noDA_by_bin:
+        bins_colors = [colors[i % len(colors)] for i in range(len(delta_tgt_DA_vs_noDA_by_bin))]
+        fig_d2, ax_d2 = _plot_combined_deltaF1_hist(
+            delta_tgt_DA_vs_noDA_by_bin,
+            title="Target DA vs no-DA",
+            colors_for_bins=bins_colors,
+            class_names=class_names,
+            ylim=(-0.15, 0.35),
+        )
+        _save_current(fig_d2, _sanitize(f"deltaF1_Target_noDA_vs_DA_combined.{save_format}"))
+        if close_after_save and save_dir: plt.close(fig_d2)
 
 def assert_array_lists_equal(list1, list2, rtol=1e-5, atol=1e-8) -> bool:
     """
@@ -326,7 +976,8 @@ def compare_sets_performance(
     y_min_Delta_F1=-0.24, y_max_Delta_F1=0.24,
     name_1="Set 1", name_2="Set 2",
     plot_ROC_curves = True,
-    color='royalblue'
+    color='royalblue',
+    title_fontsize= 22
 ):
     yy_pred_1 = np.argmax(yy_pred_P_1, axis=1)
     yy_pred_2 = np.argmax(yy_pred_P_2, axis=1)
@@ -391,7 +1042,7 @@ def compare_sets_performance(
     plt.bar(class_names, f1_2 - f1_1, color=color)
     plt.axhline(0, color='gray', linestyle='--', linewidth=1)
     plt.ylabel(f"Δ F1-score")
-    plt.title(f"{name_2} - {name_1}")
+    plt.title(f"{name_2} - {name_1}", fontsize=title_fontsize)
     plt.xticks(rotation=15, ha='right')
     plt.ylim(y_min_Delta_F1, y_max_Delta_F1)
     plt.tight_layout()
@@ -592,7 +1243,6 @@ def plot_latents_scatter(
     plt.tight_layout()
     plt.show()
 
-
 def plot_latents_scatter_val_test(
     X_val, y_val,
     X_test, y_test,
@@ -610,7 +1260,9 @@ def plot_latents_scatter_val_test(
     subsample=None,            # float in (0,1] for fraction, or int >=1 for max count; applies to each split
     seed=42,
     edgecolor="none",
-    linewidths=0.0
+    linewidths=0.0,
+    legend_split_1="Val",
+    legend_split_2="Test",
 ):
     """
     Overlay a 2D latent embedding for validation and test sets as a scatter plot.
@@ -717,8 +1369,8 @@ def plot_latents_scatter_val_test(
 
     # Legend B: split markers
     ds_handles = [
-        Line2D([0], [0], marker=marker_val, color="k", linestyle="None", markersize=8, label="val"),
-        Line2D([0], [0], marker=marker_test, color="k", linestyle="None", markersize=8, label="test"),
+        Line2D([0], [0], marker=marker_val, color="k", linestyle="None", markersize=8, label=legend_split_1),
+        Line2D([0], [0], marker=marker_test, color="k", linestyle="None", markersize=8, label=legend_split_2),
     ]
     ax.legend(handles=ds_handles, title="Split", loc="lower right",
               fontsize=9, title_fontsize=10, frameon=True)
@@ -900,7 +1552,6 @@ def plot_latent_density_2d(
 
     plt.tight_layout()
     plt.show()
-
 
 def safe_compare(a, b, path="root"):
     """Recursively compare two structures with detailed debug logs and NumPy-safe checks."""

@@ -9,7 +9,7 @@ global:
 # ════════════════════════════════════════════════════════════════════
 data:
   cleaning_config: default_global_setup
-  keys_xx: ["all_observations_normalized","all_errors_normalized","MORPHTYPE_int"]
+  keys_xx: ["all_observations_normalized","MORPHTYPE_int"]
   keys_yy: ["SPECTYPE_int"]
   key_survey_training: DESI_mocks_Raul
 
@@ -20,9 +20,9 @@ models:
   path_load: null
 
   encoder:
-    hidden_layers: [256, 128, 86]
+    hidden_layers: [256, 128, 64]
     dropout_rates: [0.001, 0.001, 0.001]
-    output_dim: 2
+    output_dim: 8
 
   downstream:
     hidden_layers: [100, 86]
@@ -38,7 +38,7 @@ training:
   sampling_strategy: true_random
   freeze_downstream_model: false
   
-  NN_epochs: 500
+  NN_epochs: 3000
   NN_batches_per_epoch: 8192
   batch_size: 65536
   batch_size_val: null

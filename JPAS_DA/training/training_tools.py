@@ -221,7 +221,12 @@ def train_single_epoch(
         logging.debug(f"features.dtype: {features.dtype} | logits.dtype: {logits.dtype}")
         logging.debug(f"yy_true: {yy_true}")
         # === Loss ===
-        loss = loss_functions.cross_entropy(yy_true, logits, loss_function_dict["class_weights"].to(device))
+        loss = loss_functions.cross_entropy(
+            yy_true, logits,
+            loss_function_dict["class_weights"].to(device),
+            parameters=model_encoder.parameters(),
+            l2_lambda=loss_function_dict["l2_lambda"],
+        )
         logging.debug(f"loss: {loss}")
         # === Backprop ===
         loss.backward()

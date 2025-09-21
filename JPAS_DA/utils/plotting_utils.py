@@ -723,6 +723,173 @@ def plot_histogram_with_ranges_multiple(
     plt.tight_layout()
     return masks_all, stats_all
 
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
+def plot_per_class_counts_together(
+    stats_magnitudes: dict,
+    *,
+    figsize=(11, 6),
+    yscale: str = "log",             # "log" or "linear"
+    class_order: list = None,        # optional enforced order of classes
+    legend_outside: bool = True,
+    title: str = "Per-class counts vs. magnitude (all entries)",
+    title_fontsize: int = 16,        # <-- NEW: title fontsize
+    class_legend_kwargs: dict = None,  # <-- NEW: kwargs for class legend (colors)
+    entry_legend_kwargs: dict = None,  # <-- NEW: kwargs for entry legend (styles)
+    grid_alpha: float = 0.25,
+):
+    """
+    Plot per-class object-count curves for ALL entries in `stats_magnitudes` on the same axes.
+
+    stats_magnitudes[(source, split)] = {
+        (low, high): {'N': int, 'per_class_counts': np.ndarray(C,), 'per_class_pct': None, 'class_labels': list[str]},
+        ...,
+        'plot_kwargs': { 'linestyle': '--', 'marker': 'o', 'markersize': 8.0, 'label': 'Your label' }
+    }
+
+    Style principle:
+    - Color = class (consistent across all entries)
+    - Linestyle/marker = entry (from entry['plot_kwargs'])
+
+    Legend customization:
+    - class_legend_kwargs controls the legend for classes (color legend).
+    - entry_legend_kwargs controls the legend for entries (style legend).
+      Example:
+        {
+          "loc": "upper left", "bbox_to_anchor": (0.73, 1.0), "fontsize": 9, "ncol": 1,
+          "title": "Evaluation Cases", "frameon": True, "fancybox": True, "shadow": True, "borderaxespad": 0.0,
+        }
+    """
+    entries = list(stats_magnitudes.keys())
+    if not entries:
+        raise ValueError("stats_magnitudes is empty.")
+
+    # --- Collect global bins (sorted unique) ---
+    all_bins = set()
+    for entry in entries:
+        d = stats_magnitudes[entry]
+        for k in d.keys():
+            if isinstance(k, tuple) and len(k) == 2:
+                all_bins.add(k)
+    if not all_bins:
+        raise ValueError("No magnitude bins found.")
+    bins = sorted(all_bins, key=lambda x: (x[0], x[1]))
+    nb = len(bins)
+    x = np.arange(nb)
+    xticklabels = [f"({lo:g}, {hi:g}]" for (lo, hi) in bins]
+
+    # --- Determine class list/order ---
+    if class_order is None:
+        seen = []
+        for entry in entries:
+            d = stats_magnitudes[entry]
+            for b in bins:
+                if b in d:
+                    for lab in d[b]["class_labels"]:
+                        if lab not in seen:
+                            seen.append(lab)
+        classes = seen
+    else:
+        classes = list(class_order)
+    C = len(classes)
+
+    # --- Color mapping per class, consistent over entries ---
+    cmap = plt.get_cmap("tab10" if C <= 10 else "tab20")
+    class_to_color = {cls: cmap(i % cmap.N) for i, cls in enumerate(classes)}
+
+    # --- Precompute counts per entry aligned to global bins & classes ---
+    counts_by_entry = {}
+    styles_by_entry = {}
+    for entry in entries:
+        d = stats_magnitudes[entry]
+        pk = dict(d.get("plot_kwargs", {}))
+        if "linstyle" in pk and "linestyle" not in pk:
+            pk["linestyle"] = pk.pop("linstyle")
+        pk.setdefault("linestyle", "-")
+        pk.setdefault("marker", None)
+        pk.setdefault("markersize", 8.0)
+        pk.setdefault("label", f"{entry[0]} — {entry[1]}")
+        styles_by_entry[entry] = pk
+
+        M = np.zeros((C, nb), dtype=float)
+        for j, b in enumerate(bins):
+            if b not in d:
+                continue
+            info = d[b]
+            bin_labels = info["class_labels"]
+            bin_counts = np.asarray(info["per_class_counts"]).astype(float)
+            idx_map = {lab: i for i, lab in enumerate(bin_labels)}
+            for i, cls in enumerate(classes):
+                if cls in idx_map:
+                    M[i, j] = bin_counts[idx_map[cls]]
+        counts_by_entry[entry] = M
+
+    # --- Plot ---
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # For legends
+    class_handles = {}
+    entry_handles = []
+
+    # One line per (class, entry): color by class; linestyle/marker by entry
+    for i, cls in enumerate(classes):
+        color = class_to_color[cls]
+        class_handles.setdefault(cls, Line2D([0], [0], color=color, lw=3, label=cls))
+        for entry in entries:
+            pk = styles_by_entry[entry]
+            ax.plot(
+                x, counts_by_entry[entry][i],
+                color=color,
+                linestyle=pk["linestyle"],
+                marker=pk["marker"],
+                markersize=pk["markersize"],
+                linewidth=2.0,
+            )
+
+    # Build entry legend handles using neutral color (black), styled by entry
+    for entry in entries:
+        pk = styles_by_entry[entry]
+        entry_handles.append(
+            Line2D([0], [0],
+                   color="black",
+                   linestyle=pk["linestyle"],
+                   marker=pk["marker"],
+                   markersize=pk["markersize"],
+                   linewidth=2.5,
+                   label=pk["label"])
+        )
+
+    # Axes cosmetics
+    ax.set_title(title, fontsize=title_fontsize)  # <-- use customizable title fontsize
+    ax.set_xlabel("Magnitude bin (low, high]")
+    ax.set_ylabel("Objects")
+    ax.set_xticks(x)
+    ax.set_xticklabels(xticklabels, rotation=20, ha="right")
+    if yscale == "log":
+        ax.set_yscale("log")
+    ax.grid(True, axis="y", alpha=grid_alpha)
+
+    # Defaults for both legends (can be overridden by *_legend_kwargs)
+    default_class_legend = {"title": "Class (color)", "loc": "upper left", "bbox_to_anchor": (1.01, 1.0)}
+    default_entry_legend = {"title": "Entry (style)", "loc": "lower left", "bbox_to_anchor": (1.01, 0.0)}
+
+    cls_kwargs = {**default_class_legend, **(class_legend_kwargs or {})}
+    ent_kwargs = {**default_entry_legend, **(entry_legend_kwargs or {})}
+
+    leg1 = ax.legend(handles=list(class_handles.values()), **cls_kwargs)
+    ax.add_artist(leg1)
+    ax.legend(handles=entry_handles, **ent_kwargs)
+
+    if legend_outside:
+        plt.tight_layout(rect=[0, 0, 0.8, 1])
+    else:
+        plt.tight_layout()
+
+    return fig, ax
+
+
 def plot_training_curves(path_save):
     # Load training data
     losses = np.loadtxt(os.path.join(path_save, 'register.txt'))

@@ -118,7 +118,13 @@ def wrapper_define_or_load_models_from_config(input_dim, n_classes, config_model
         path_load_encoder = os.path.join(global_setup.path_models, path_load_models, "model_encoder.pt")
         assert os.path.isfile(path_load_encoder), f"❌ Encoder checkpoint not found: {path_load_encoder}"
         logging.info(f"📥 Loading encoder from checkpoint: {path_load_encoder}")
-        config_encoder, model_encoder = save_load_tools.load_model_from_checkpoint(path_load_encoder, model_building_tools.create_mlp)
+
+        config_encoder, model_encoder = save_load_tools.load_model_from_checkpoint(
+            path_load_encoder,
+            model_building_tools.create_mlp,
+            override_dropout=config_models.get("encoder", {}).get("dropout_rates", None),
+            use_batchnorm=config_models.get("encoder", {}).get("use_batchnorm", None),
+        )
     else:
         logging.info("🛠️ Building encoder model from configuration...")
         config_encoder = {
@@ -126,18 +132,26 @@ def wrapper_define_or_load_models_from_config(input_dim, n_classes, config_model
             'hidden_layers': config_models["encoder"]["hidden_layers"],
             'dropout_rates': config_models["encoder"]["dropout_rates"],
             'output_dim': config_models["encoder"]["output_dim"],
-            'use_batchnorm': False,
+            'use_batchnorm': config_models["encoder"].get("use_batchnorm", False),
             'use_layernorm_at_output': False,
             'init_method': 'xavier'
         }
         model_encoder = model_building_tools.create_mlp(**config_encoder)
+
+    model_encoder.eval()
 
     # ───── Load or build downstream model ─────
     if path_load_models:
         path_load_downstream = os.path.join(global_setup.path_models, path_load_models, "model_downstream.pt")
         assert os.path.isfile(path_load_downstream), f"❌ Downstream checkpoint not found: {path_load_downstream}"
         logging.info(f"📥 Loading downstream model from checkpoint: {path_load_downstream}")
-        config_downstream, model_downstream = save_load_tools.load_model_from_checkpoint(path_load_downstream, model_building_tools.create_mlp)
+
+        config_downstream, model_downstream = save_load_tools.load_model_from_checkpoint(
+            path_load_downstream,
+            model_building_tools.create_mlp,
+            override_dropout=config_models.get("downstream", {}).get("dropout_rates", None),
+            use_batchnorm=config_models.get("downstream", {}).get("use_batchnorm", None),
+        )
     else:
         logging.info("🛠️ Building downstream model from configuration...")
         config_downstream = {
@@ -145,11 +159,13 @@ def wrapper_define_or_load_models_from_config(input_dim, n_classes, config_model
             'hidden_layers': config_models["downstream"]["hidden_layers"],
             'dropout_rates': config_models["downstream"]["dropout_rates"],
             'output_dim': n_classes,
-            'use_batchnorm': False,
+            'use_batchnorm': config_models["downstream"].get("use_batchnorm", False),
             'use_layernorm_at_output': False,
             'init_method': 'xavier'
         }
         model_downstream = model_building_tools.create_mlp(**config_downstream)
+
+    model_downstream.eval()
 
     logging.info("✅ Models ready for training or evaluation.")
     return config_encoder, model_encoder, config_downstream, model_downstream

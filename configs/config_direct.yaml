@@ -11,7 +11,7 @@ data:
   cleaning_config: default_global_setup
   keys_xx: ["all_observations_normalized","MORPHTYPE_int"]
   keys_yy: ["SPECTYPE_int"]
-  key_survey_training: DESI_mocks_Raul
+  key_survey_training: JPAS_x_DESI_Raul
 
 # ════════════════════════════════════════════════════════════════════
 # Model Architecture
@@ -20,15 +20,15 @@ models:
   path_load: null
 
   encoder:
-    hidden_layers: [256, 128, 64]
-    dropout_rates: [0.001, 0.001, 0.001]
-    output_dim: 2
-    use_batchnorm: False
+    hidden_layers: [64, 32, 16]
+    dropout_rates: [0.02, 0.02, 0.02]
+    output_dim: 8
+    use_batchnorm: true
 
   downstream:
-    hidden_layers: [100, 86]
-    dropout_rates: [0.001, 0.001]
-    use_batchnorm: False
+    hidden_layers: [16, 16]
+    dropout_rates: [0.02, 0.02]
+    use_batchnorm: true
 
 # ════════════════════════════════════════════════════════════════════
 # Training Configuration
@@ -39,16 +39,16 @@ training:
 
   sampling_strategy: true_random
   freeze_downstream_model: false
-  l2_lambda: 0.0
+  l2_lambda: 0.002
 
-  NN_epochs: 3000
-  NN_batches_per_epoch: 8192
-  batch_size: 65536
+  NN_epochs: 1024
+  NN_batches_per_epoch: 2
+  batch_size: 11051
   batch_size_val: null
 
-  lr: 0.005
-  weight_decay: 1.0e-09
-  clip_grad_norm: 1.
+  lr: 0.0005
+  weight_decay: 0.001
+  clip_grad_norm: 100.0
 
   seed_mode: deterministic
   seed: 137

@@ -168,8 +168,8 @@ splits = ["train", "val", "test"]
 
 dict_split_data_options = {
     # Splitting ratios for intersecting datasets
-    "train_ratio_intersection"            : 0.4,
-    "val_ratio_intersection"              : 0.2,
+    "train_ratio_intersection"            : 0.3,
+    "val_ratio_intersection"              : 0.3,
     "test_ratio_intersection"             : 0.4,
     "random_seed_split_intersection"      : default_seed,
     # Splitting ratios for outersecting dataset

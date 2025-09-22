@@ -19,6 +19,14 @@ data:
 models:
   path_load: 09_no_DA
 
+  encoder:
+    dropout_rates: [0.02, 0.02, 0.02]
+    use_batchnorm: False
+
+  downstream:
+    dropout_rates: [0.02, 0.02]
+    use_batchnorm: False
+
 # ════════════════════════════════════════════════════════════════════
 # Training Configuration
 # ════════════════════════════════════════════════════════════════════
@@ -28,16 +36,16 @@ training:
   
   sampling_strategy: true_random
   freeze_downstream_model: True
-  l2_lambda: 0.0005
+  l2_lambda: 0.002
   
   NN_epochs: 1024
-  NN_batches_per_epoch: 16
-  batch_size: 4096
+  NN_batches_per_epoch: 2
+  batch_size: 11051
   batch_size_val: null
 
-  lr: 0.00001
-  weight_decay: 0.0001
-  clip_grad_norm: 10.0
+  lr: 0.0001
+  weight_decay: 0.001
+  clip_grad_norm: 0.00001
 
   seed_mode: deterministic
   seed: 137

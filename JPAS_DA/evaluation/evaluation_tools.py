@@ -217,7 +217,7 @@ def radar_plot(
     class_names,
     *,
     title: str = None,
-    title_pad: float = 20,            # optional title padding
+    title_pad: float = 20,
     figsize=(10, 10),
     theta_offset=np.pi/2,
     theta_direction=-1,
@@ -229,30 +229,35 @@ def radar_plot(
     show_legend=True,
     legend_kwargs=None,
     close_line=True,
+    # NEW: fill controls (global defaults; can be overridden per case in plot_kwargs)
+    fill_default=True,
+    fill_alpha_default=0.18,
 ):
     """
     Flexible radar-plot for per-class F1 scores across multiple cases.
-    - Class tick labels are rotated tangentially.
-    - Accepts 'marker' and 'markersize' in each case's plot_kwargs to draw a
-      scatter marker at each class vertex (in addition to the connecting line).
+
+    Legend labels are taken from the dict keys in `dict_radar` (case_name).
+    Any 'label' inside payload['plot_kwargs'] is ignored/overridden.
+
+    Per-series fill overrides in payload['plot_kwargs']:
+      - 'fill': bool (default: fill_default)
+      - 'fill_alpha': float (default: fill_alpha_default)
+      - 'fill_color': matplotlib color (default: series line color)
     """
     class_names = list(class_names)
     C = len(class_names)
     labels_range = np.arange(C)
 
-    # Angles per class; duplicate first for closure if requested
+    # Angles per class
     angles = np.linspace(0, 2*np.pi, C, endpoint=False).tolist()
-    if close_line:
-        angles_closed = angles + angles[:1]
-    else:
-        angles_closed = angles
+    angles_closed = angles + angles[:1] if close_line else angles
 
     fig, ax = plt.subplots(figsize=figsize, subplot_kw=dict(polar=True))
     ax.set_theta_offset(theta_offset)
     ax.set_theta_direction(theta_direction)
 
-    # Set tick positions/labels
-    tick_angles = angles  # unclosed positions for class ticks
+    # Class tick positions/labels
+    tick_angles = angles
     tick_degs = np.degrees(tick_angles)
     ax.set_thetagrids(tick_degs, class_names, fontsize=tick_labelsize)
 
@@ -281,31 +286,45 @@ def radar_plot(
         f1 = f1_score(y_true, y_hat, average=None, labels=labels_range, zero_division=0)
         f1_closed = (f1.tolist() + [f1[0]]) if close_line else f1.tolist()
 
-        # Style (support alias "linstyle")
+        # Style (force legend label to dict key)
         pk = dict(payload.get("plot_kwargs", {}))
         if "linstyle" in pk and "linestyle" not in pk:
             pk["linestyle"] = pk.pop("linstyle")
         pk.setdefault("linewidth", linewidth_default)
-        pk.setdefault("label", case_name)
+        pk["label"] = str(case_name)
 
         color = pk.get("color", None)
         marker = pk.get("marker", None)
-        markersize = float(pk.get("markersize", 8.0))  # points
+        markersize = float(pk.get("markersize", 8.0))
         alpha = pk.get("alpha", 1.0)
 
-        # Line
+        # Fill overrides (per-series)
+        fill_on = bool(pk.pop("fill", fill_default))
+        fill_alpha = float(pk.pop("fill_alpha", fill_alpha_default))
+        fill_color = pk.pop("fill_color", None)
+
+        # Plot line (legend handle)
         line = ax.plot(angles_closed, f1_closed, **pk)[0]
         handles.append(line)
 
-        # --- NEW: scatter markers at vertices (per class) ---
-        # Use unclosed angles and raw f1 values to avoid duplicate first point.
-        if marker is None:
-            # If no marker specified, still draw a subtle vertex marker for readability?
-            # Uncomment next line to always show default markers:
-            # marker = "o"
-            pass
+        # Fill under curve (ensure closed polygon for fill even if close_line=False)
+        if fill_on:
+            face = fill_color if fill_color is not None else (color if color is not None else line.get_color())
+            if close_line:
+                angles_fill = angles_closed
+                f1_fill = f1_closed
+            else:
+                angles_fill = angles + angles[:1]
+                f1_fill = f1.tolist() + [f1[0]]
+            ax.fill(
+                angles_fill, f1_fill,
+                color=face, alpha=fill_alpha,
+                zorder=line.get_zorder() - 1,
+                label="_nolegend_",
+            )
+
+        # Optional vertex markers (kept out of legend)
         if marker is not None:
-            # matplotlib.scatter uses size in points^2
             s = markersize ** 2
             mfc = pk.get("markerfacecolor", color)
             mec = pk.get("markeredgecolor", color)
@@ -314,25 +333,21 @@ def radar_plot(
                 tick_angles, f1,
                 s=s, marker=marker,
                 facecolors=mfc if mfc is not None else "none",
-                edgecolors=mec if mec is not None else color,
+                edgecolors=mec if mec is not None else face if fill_on else (color or line.get_color()),
                 linewidths=mew,
                 alpha=alpha,
                 zorder=5,
-                label="_nolegend_",  # avoid duplicate legend entries
+                label="_nolegend_",
             )
 
-    # ---- Rotate class-name tick labels tangentially to the circle ----
+    # Rotate class-name tick labels tangentially
     offset_deg = np.degrees(theta_offset)
-    tick_labels = ax.get_xticklabels()
-    for lbl, base_deg in zip(tick_labels, tick_degs):
+    for lbl, base_deg in zip(ax.get_xticklabels(), tick_degs):
         ang_disp = (base_deg * theta_direction + offset_deg) % 360.0
-        # Tangential rotation with left/right alignment to keep text upright
         if 90.0 < ang_disp < 270.0:
-            rotation = ang_disp + 180.0
-            ha = "right"
+            rotation, ha = ang_disp + 180.0, "right"
         else:
-            rotation = ang_disp
-            ha = "left"
+            rotation, ha = ang_disp, "left"
         lbl.set_rotation(rotation)
         lbl.set_rotation_mode("anchor")
         lbl.set_horizontalalignment(ha)
@@ -342,11 +357,12 @@ def radar_plot(
     if title:
         ax.set_title(title, pad=title_pad, fontsize=16)
     if show_legend:
-        legend_kwargs = legend_kwargs or {}
+        legend_kwargs = dict(loc="upper right", frameon=True) | (legend_kwargs or {})
         ax.legend(handles=handles, **legend_kwargs)
 
     plt.tight_layout()
     return fig, ax
+
 
 def evaluate_all_plots_by_mag_bins(
     masks_magnitudes: dict,
@@ -365,6 +381,11 @@ def evaluate_all_plots_by_mag_bins(
     save_format: str = "png",
     save_dpi: int = 200,
     close_after_save: bool = False,   # close figs after saving (useful when show=False in loops)
+    required_entries = [
+        ("Mocks", "Test"),
+        ("JPAS x DESI", "Test"),
+        ("JPAS x DESI", "Train"),  # only to align available bins; not plotted
+    ]
 ):
     """
     Per magnitude bin:
@@ -405,8 +426,15 @@ def evaluate_all_plots_by_mag_bins(
         y_pred = np.argmax(y_pred_probs, axis=1)
         return f1_score(y_true, y_pred, labels=np.arange(n_classes), average=None, zero_division=0)
 
-    def _plot_combined_deltaF1_hist(delta_by_bin: dict, *, title: str, colors_for_bins: list,
-                                    class_names: list, ylim=(-0.5, 0.5), figsize=(11, 6)):
+    def _plot_combined_deltaF1_hist(
+            delta_by_bin: dict, *, title: str, colors_for_bins: list,
+            class_names: list, ylim=(-0.5, 0.5), figsize=(11, 6),
+            required_entries = [
+                ("Mocks", "Test"),
+                ("JPAS x DESI", "Test"),
+                ("JPAS x DESI", "Train"),  # only to align available bins; not plotted
+            ]
+        ):
         """
         delta_by_bin: dict {bin_label: np.ndarray(n_classes,)}
         One grouped bar chart: per class, bars for each bin (colored by bin color).
@@ -441,12 +469,6 @@ def evaluate_all_plots_by_mag_bins(
         colors = ['blue', 'green', 'orange', 'red']
     if colormaps is None:
         colormaps = [plt.cm.Blues, plt.cm.Greens, plt.cm.YlOrBr, plt.cm.Reds]
-
-    required_entries = [
-        ("Mocks", "Test"),
-        ("JPAS x DESI", "Test"),
-        ("JPAS x DESI", "Train"),  # only to align available bins; not plotted
-    ]
 
     # Intersect bins across required entries
     bins_sets = []
@@ -658,10 +680,11 @@ def evaluate_all_plots_by_mag_bins(
         bins_colors = [colors[i % len(colors)] for i in range(len(delta_tgt_vs_src_noDA_by_bin))]
         fig_d1, ax_d1 = _plot_combined_deltaF1_hist(
             delta_tgt_vs_src_noDA_by_bin,
-            title="Target no-DA vs Source no-DA",
+            title="JPAS Obs. VS Mocks (no-DA)",
             colors_for_bins=bins_colors,
             class_names=class_names,
             ylim=(-0.78, 0.15),
+            required_entries=required_entries
         )
         _save_current(fig_d1, _sanitize(f"deltaF1_Source_vs_Target_noDA_combined.{save_format}"))
         if close_after_save and save_dir: plt.close(fig_d1)
@@ -670,10 +693,11 @@ def evaluate_all_plots_by_mag_bins(
         bins_colors = [colors[i % len(colors)] for i in range(len(delta_tgt_DA_vs_noDA_by_bin))]
         fig_d2, ax_d2 = _plot_combined_deltaF1_hist(
             delta_tgt_DA_vs_noDA_by_bin,
-            title="Target DA vs no-DA",
+            title="DA VS no-DA (JPAS Obs.)",
             colors_for_bins=bins_colors,
             class_names=class_names,
             ylim=(-0.15, 0.35),
+            required_entries=required_entries
         )
         _save_current(fig_d2, _sanitize(f"deltaF1_Target_noDA_vs_DA_combined.{save_format}"))
         if close_after_save and save_dir: plt.close(fig_d2)
@@ -975,10 +999,23 @@ def compare_sets_performance(
     class_names=None,
     y_min_Delta_F1=-0.24, y_max_Delta_F1=0.24,
     name_1="Set 1", name_2="Set 2",
-    plot_ROC_curves = True,
+    plot_ROC_curves=True,
     color='royalblue',
-    title_fontsize= 22
+    title_fontsize=22,
+    f1_save_path=None  # <- NEW: optional path to save the ΔF1 figure as PDF
 ):
+    """
+    Compare two sets' performance and plot ΔF1 per class.
+
+    Parameters
+    ----------
+    ...
+    f1_save_path : str or None
+        If provided, saves the ΔF1 figure as a PDF. Can be a filename ending in .pdf
+        or a directory path (in which case a default filename is used).
+    """
+    import os
+
     yy_pred_1 = np.argmax(yy_pred_P_1, axis=1)
     yy_pred_2 = np.argmax(yy_pred_P_2, axis=1)
 
@@ -994,8 +1031,11 @@ def compare_sets_performance(
         "Accuracy": (accuracy_score(yy_true_1, yy_pred_1), accuracy_score(yy_true_2, yy_pred_2), True),
         "Macro F1": (np.mean(f1_1), np.mean(f1_2), True),
         "Macro TPR": (np.mean(tpr_1), np.mean(tpr_2), True),
-        "Macro Precision": (precision_score(yy_true_1, yy_pred_1, average='macro', zero_division=0),
-                            precision_score(yy_true_2, yy_pred_2, average='macro', zero_division=0), True),
+        "Macro Precision": (
+            precision_score(yy_true_1, yy_pred_1, average='macro', zero_division=0),
+            precision_score(yy_true_2, yy_pred_2, average='macro', zero_division=0),
+            True
+        ),
         "Macro AUROC": (
             roc_auc_score(
                 yy_true_1,
@@ -1003,14 +1043,12 @@ def compare_sets_performance(
                 average='macro' if is_multiclass else None,
                 multi_class='ovo' if is_multiclass else 'raise'
             ) if len(np.unique(yy_true_1)) > 1 else np.nan,
-
             roc_auc_score(
                 yy_true_2,
                 yy_pred_P_2 if is_multiclass else yy_pred_P_2[:, 1],
                 average='macro' if is_multiclass else None,
                 multi_class='ovo' if is_multiclass else 'raise'
             ) if len(np.unique(yy_true_2)) > 1 else np.nan,
-
             True
         ),
         "Expected Calibration Error": (compute_ece(yy_true_1, yy_pred_P_1), compute_ece(yy_true_2, yy_pred_P_2), False),
@@ -1037,15 +1075,38 @@ def compare_sets_performance(
     if class_names is None:
         class_names = [f"Class {i}" for i in range(len(f1_1))]
 
-    # Plot generalization gap in per-class F1
-    plt.figure(figsize=(10, 5))
-    plt.bar(class_names, f1_2 - f1_1, color=color)
-    plt.axhline(0, color='gray', linestyle='--', linewidth=1)
-    plt.ylabel(f"Δ F1-score")
-    plt.title(f"{name_2} - {name_1}", fontsize=title_fontsize)
+    # ---- ΔF1 bar plot ----
+    fig = plt.figure(figsize=(10, 5))
+    ax = fig.add_subplot(111)
+    ax.bar(class_names, f1_2 - f1_1, color=color)
+    ax.axhline(0, color='gray', linestyle='--', linewidth=1)
+    ax.set_ylabel("Δ F1-score")
+    ax.set_title(f"{name_2} - {name_1}", fontsize=title_fontsize)
     plt.xticks(rotation=15, ha='right')
-    plt.ylim(y_min_Delta_F1, y_max_Delta_F1)
-    plt.tight_layout()
+    ax.set_ylim(y_min_Delta_F1, y_max_Delta_F1)
+    fig.tight_layout()
+
+    # --- Optional save to PDF ---
+    if f1_save_path is not None:
+        # If no .pdf suffix, or looks like a directory, build a filename
+        target_path = f1_save_path
+        base, ext = os.path.splitext(target_path)
+        if ext.lower() != ".pdf":
+            # treat as directory or base without .pdf
+            # if it's a directory (existing or intended), ensure it exists
+            if (ext == "") and (not os.path.basename(base)):  # path ends with slash-like
+                os.makedirs(base, exist_ok=True)
+                filename = f"Delta_F1_{name_2.replace(' ', '_')}_minus_{name_1.replace(' ', '_')}.pdf"
+                target_path = os.path.join(base, filename)
+            else:
+                # add .pdf to whatever they passed
+                os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
+                target_path = base + ".pdf"
+        else:
+            os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
+
+        fig.savefig(target_path, format="pdf", bbox_inches="tight")
+
     plt.show()
 
     # ROC Curves
@@ -1054,8 +1115,9 @@ def compare_sets_performance(
             yy_true_1, yy_pred_P_1, yy_true_2, yy_pred_P_2,
             class_names=class_names, name_1=name_1, name_2=name_2
         )
-    
+
     return metrics, f1_1, f1_2
+
 
 def safe_interp(fpr, tpr, x_new):
     fpr_unique, idx = np.unique(fpr, return_index=True)

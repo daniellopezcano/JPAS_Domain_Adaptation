@@ -212,6 +212,127 @@ def plot_overall_deltaF1_two_comparisons(
 
     return fig, ax
 
+
+def plot_overall_deltaF1_grouped(
+    comparisons,                 # list of (y_true_A, y_pred_A, y_true_B, y_pred_B[, label])
+    class_names,
+    *,
+    title="ΔF1 per class (overall)",
+    colors=None,                 # list of N colors; None -> use matplotlib cycle
+    labels=None,                 # list of N legend labels; None -> use provided tuple labels or generic
+    figsize=(12, 6),
+    ylim=None,                   # (ymin, ymax); None -> symmetric from data
+    alpha=0.9,
+    edgecolor="black",
+    group_width=0.80,            # total width occupied by all bars in a class group (0..1)
+    bar_width=None,              # None -> group_width / N
+    xtick_rotation=20,
+    grid=True,
+    legend_kwargs=None,          # e.g. {"loc":"upper right", "frameon":True}
+    show=True,
+    save_dir=None, save_format="pdf", save_dpi=200, filename="deltaF1_grouped"
+):
+    """
+    Plot one figure with grouped bars per class for N comparisons.
+    Each comparison i contributes ΔF1_i = F1(B_i) - F1(A_i) for every class.
+
+    comparisons:
+      list of tuples: (y_true_A, y_pred_P_A, y_true_B, y_pred_P_B[, label])
+      - y_pred_P_* are softmax probabilities with shape [n_samples, n_classes]
+      - optional label at the end can be omitted; then labels=... controls legend
+    """
+    n_classes = len(class_names)
+
+    def _f1_per_class(y_true, y_pred_probs):
+        if len(y_true) == 0:
+            return np.zeros(n_classes, dtype=float)
+        y_pred = np.argmax(y_pred_probs, axis=1)
+        # Use labels=range(n_classes) so missing classes map to 0 gracefully
+        return f1_score(y_true, y_pred, labels=np.arange(n_classes), average=None, zero_division=0)
+
+    # --- Compute ΔF1 for all comparisons ---
+    deltas = []
+    inferred_labels = []
+    for tup in comparisons:
+        if len(tup) == 5:
+            yA, pA, yB, pB, lab = tup
+        else:
+            yA, pA, yB, pB = tup
+            lab = None
+        f1A = _f1_per_class(yA, pA)
+        f1B = _f1_per_class(yB, pB)
+        deltas.append(f1B - f1A)
+        inferred_labels.append(lab if lab is not None else "ΔF1")
+
+    deltas = np.asarray(deltas)          # shape (N, n_classes)
+    N = deltas.shape[0]
+    x = np.arange(n_classes)
+
+    # --- Colors / labels ---
+    if colors is None:
+        cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
+        colors = [cycle[i % len(cycle)] if cycle else "C{}".format(i) for i in range(N)]
+    else:
+        if len(colors) < N:
+            colors = colors + [colors[-1]] * (N - len(colors))
+        colors = colors[:N]
+
+    if labels is None:
+        labels = inferred_labels
+    else:
+        if len(labels) < N:
+            labels = list(labels) + [f"ΔF1 {i+1}"] * (N - len(labels))
+        labels = labels[:N]
+
+    # --- Bar geometry ---
+    if bar_width is None:
+        bar_width = group_width / max(1, N)
+    offsets = (np.arange(N) - (N - 1) / 2.0) * bar_width  # centered around each class position
+
+    # --- y-limits (symmetric if not provided) ---
+    if ylim is None:
+        max_abs = float(np.max(np.abs(deltas))) if deltas.size else 0.0
+        pad = 0.05 if max_abs == 0 else 0.1 * max_abs
+        ylim = (-max_abs - pad, max_abs + pad)
+
+    # --- Plot ---
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for i in range(N):
+        ax.bar(
+            x + offsets[i], deltas[i], width=bar_width,
+            color=colors[i], alpha=alpha, edgecolor=edgecolor, label=labels[i]
+        )
+
+    ax.axhline(0.0, color="black", linewidth=1)
+    ax.set_ylim(*ylim)
+    ax.set_xticks(x)
+    ax.set_xticklabels(class_names, rotation=xtick_rotation, ha="right")
+    ax.set_ylabel("ΔF1")
+    ax.set_xlabel("Class")
+    ax.set_title(title)
+    if grid:
+        ax.grid(axis="y", linestyle=":", alpha=0.4)
+
+    if legend_kwargs is None:
+        legend_kwargs = {"loc": "upper right", "frameon": True}
+    ax.legend(**legend_kwargs)
+
+    fig.tight_layout()
+
+    # --- Save if requested ---
+    if save_dir is not None:
+        Path(save_dir).mkdir(parents=True, exist_ok=True)
+        out_path = Path(save_dir) / f"{filename}.{save_format}"
+        fig.savefig(out_path, dpi=save_dpi, bbox_inches="tight")
+
+    if show:
+        plt.show()
+
+    return fig, ax, deltas
+
+
+
 def radar_plot(
     dict_radar: dict,
     class_names,
@@ -491,17 +612,25 @@ def evaluate_all_plots_by_mag_bins(
                 styles[key] = dict(spec["plot_kwargs"])  # copy
 
     # Defaults if not provided
-    styles.setdefault("Source-Test (Mocks) no-DA", {
-        "linestyle": "--", "linewidth": 2.0, "color": "orange",
-        "marker": "+", "markersize": 8.0, "label": "Source-Test (Mocks) no-DA"
+    styles.setdefault("JPAS Obs. Fully_Supervised", {
+        "linestyle": "-", "linewidth": 1.0, "color": "k",
+        "marker": "s", "markersize": 10.0, "label": "JPAS Obs. Fully_Supervised", "fill_alpha": 0.0
     })
-    styles.setdefault("Target-Test (JPAS x DESI) no-DA", {
+    styles.setdefault("Mocks no-DA", {
+        "linestyle": "--", "linewidth": 2.0, "color": "royalblue",
+        "marker": "^", "markersize": 10.0, "label": "Mocks no-DA"
+    })
+    styles.setdefault("JPAS Obs. no-DA", {
         "linestyle": "-.", "linewidth": 2.0, "color": "crimson",
-        "marker": "x", "markersize": 8.0, "label": "Target-Test (JPAS x DESI) no-DA"
+        "marker": "X", "markersize": 10.0, "label": "JPAS Obs. no-DA"
     })
-    styles.setdefault("Target-Test (JPAS x DESI) DA", {
+    styles.setdefault("JPAS Obs. (Train) DA", {
+        "linestyle": ":", "linewidth": 2.0, "color": "orange",
+        "marker": "+", "markersize": 10.0, "label": "TJPAS Obs. (Train) DA"
+    })
+    styles.setdefault("TJPAS Obs. DA", {
         "linestyle": "-", "linewidth": 2.0, "color": "limegreen",
-        "marker": "o", "markersize": 8.0, "label": "Target-Test (JPAS x DESI) DA"
+        "marker": "o", "markersize": 10.0, "label": "JPAS Obs. DA"
     })
 
     # Defaults for radar kwargs (can be overridden via radar_kwargs)
@@ -544,13 +673,18 @@ def evaluate_all_plots_by_mag_bins(
 
         # --- Masks ---
         m_mocks_test = masks_magnitudes[("Mocks", "Test")][(lo, hi)]
+        m_jpas_train = masks_magnitudes[("JPAS x DESI", "Train")][(lo, hi)]
         m_jpas_test  = masks_magnitudes[("JPAS x DESI", "Test")][(lo, hi)]
 
         # --- Slices ---
         y_true_src = yy["DESI_mocks_Raul"]["test"]["SPECTYPE_int"][m_mocks_test]
         y_pred_src_noDA = probs["no-DA"]["DESI_mocks_Raul"]["test"][m_mocks_test]
 
+        y_true_tgt_train = yy["JPAS_x_DESI_Raul"]["train"]["SPECTYPE_int"][m_jpas_train]
+        y_pred_tgt_train_DA = probs["DA"]["JPAS_x_DESI_Raul"]["train"][m_jpas_train]
+
         y_true_tgt_test = yy["JPAS_x_DESI_Raul"]["test"]["SPECTYPE_int"][m_jpas_test]
+        y_pred_tgt_test_direct = probs["direct"]["JPAS_x_DESI_Raul"]["test"][m_jpas_test]
         y_pred_tgt_test_noDA = probs["no-DA"]["JPAS_x_DESI_Raul"]["test"][m_jpas_test]
         y_pred_tgt_test_DA = probs["DA"]["JPAS_x_DESI_Raul"]["test"][m_jpas_test]
 
@@ -590,20 +724,30 @@ def evaluate_all_plots_by_mag_bins(
 
         # --- Per-bin radar (as before) ---
         dict_radar_bin = {
-            "Source-Test (Mocks) no-DA": {
+            "JPAS Obs. Fully_Supervised": {
+                "y_true": y_true_tgt_test,
+                "y_pred": y_pred_tgt_test_direct,
+                "plot_kwargs": {**styles["JPAS Obs. Fully_Supervised"], "color": color_this_bin},
+            },
+            "Mocks no-DA": {
                 "y_true": y_true_src,
                 "y_pred": y_pred_src_noDA,
-                "plot_kwargs": {**styles["Source-Test (Mocks) no-DA"], "color": color_this_bin},
+                "plot_kwargs": {**styles["Mocks no-DA"], "color": color_this_bin},
             },
-            "Target-Test (JPAS x DESI) no-DA": {
+            "JPAS Obs. no-DA": {
                 "y_true": y_true_tgt_test,
                 "y_pred": y_pred_tgt_test_noDA,
-                "plot_kwargs": {**styles["Target-Test (JPAS x DESI) no-DA"], "color": color_this_bin},
+                "plot_kwargs": {**styles["JPAS Obs. no-DA"], "color": color_this_bin},
             },
-            "Target-Test (JPAS x DESI) DA": {
+            "JPAS Obs. (Train) DA": {
+                "y_true": y_true_tgt_test,
+                "y_pred": y_pred_tgt_test_noDA,
+                "plot_kwargs": {**styles["JPAS Obs. (Train) DA"], "color": color_this_bin},
+            },
+            "JPAS Obs. DA": {
                 "y_true": y_true_tgt_test,
                 "y_pred": y_pred_tgt_test_DA,
-                "plot_kwargs": {**styles["Target-Test (JPAS x DESI) DA"], "color": color_this_bin},
+                "plot_kwargs": {**styles["JPAS Obs. DA"], "color": color_this_bin},
             },
         }
         if any(len(v["y_true"]) > 0 for v in dict_radar_bin.values()):
@@ -618,22 +762,36 @@ def evaluate_all_plots_by_mag_bins(
 
         # --- Accumulate for COMBINED radar: split into (case×bin) items ---
         # Keep linestyles by case, override color by bin, and append bin tag to label.
-        for case_key in ("Source-Test (Mocks) no-DA",
-                         "Target-Test (JPAS x DESI) no-DA",
-                         "Target-Test (JPAS x DESI) DA"):
-            if case_key == "Source-Test (Mocks) no-DA" and _nonempty(y_true_src, y_pred_src_noDA):
+        for case_key in ("JPAS Obs. Fully_Supervised",
+                         "Mocks no-DA",
+                         "JPAS Obs. no-DA",
+                         "JPAS Obs. (Train) DA",
+                         "JPAS Obs. DA"):
+            if case_key == "JPAS Obs. Fully_Supervised" and _nonempty(y_true_src, y_pred_src_noDA):
                 dict_radar_combined[f"{case_key} [{bin_label}]"] = {
                     "y_true": y_true_src,
                     "y_pred": y_pred_src_noDA,
                     "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
                 }
-            elif case_key == "Target-Test (JPAS x DESI) no-DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA):
+            elif case_key == "Mocks no-DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA):
                 dict_radar_combined[f"{case_key} [{bin_label}]"] = {
                     "y_true": y_true_tgt_test,
                     "y_pred": y_pred_tgt_test_noDA,
                     "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
                 }
-            elif case_key == "Target-Test (JPAS x DESI) DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
+            elif case_key == "JPAS Obs. no-DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
+                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
+                    "y_true": y_true_tgt_test,
+                    "y_pred": y_pred_tgt_test_DA,
+                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
+                }
+            elif case_key == "JPAS Obs. (Train) DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
+                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
+                    "y_true": y_true_tgt_test,
+                    "y_pred": y_pred_tgt_test_DA,
+                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
+                }
+            elif case_key == "JPAS Obs. DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
                 dict_radar_combined[f"{case_key} [{bin_label}]"] = {
                     "y_true": y_true_tgt_test,
                     "y_pred": y_pred_tgt_test_DA,
@@ -1051,7 +1209,7 @@ def compare_sets_performance(
             ) if len(np.unique(yy_true_2)) > 1 else np.nan,
             True
         ),
-        "Expected Calibration Error": (compute_ece(yy_true_1, yy_pred_P_1), compute_ece(yy_true_2, yy_pred_P_2), False),
+        "ECE": (compute_ece(yy_true_1, yy_pred_P_1), compute_ece(yy_true_2, yy_pred_P_2), False),
         "Brier Score": (
             multiclass_brier_score(yy_true_1, yy_pred_P_1),
             multiclass_brier_score(yy_true_2, yy_pred_P_2),

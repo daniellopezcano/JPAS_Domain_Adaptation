@@ -60,7 +60,7 @@ def cross_entropy(
                 reg = reg + l1_lambda * torch.sum(p.abs())
         loss = loss + reg
 
-    return loss
+    return loss / yy_true.size(0)
 
 def weinberger_loss(yy, delta_pull=0.5, delta_push=1.5, c_pull=1., c_push=1., c_reg=0.001, _epsilon=1e-8, save_plots_path=None):
     """

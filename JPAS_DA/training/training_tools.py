@@ -100,10 +100,6 @@ def train_model(
     model_encoder.to(device)
     model_downstream.to(device)
 
-    # Use same batch size for validation if not provided
-    if batch_size_val is None:
-        batch_size_val = len(dset_val.yy[list(dset_val.yy.keys())[0]])
-
     # Use training set for validation if in overfit mode
     if seed_mode == "overfit":
         dset_val = dset_train
@@ -294,14 +290,21 @@ def eval_single_epoch(
     - val_loss (dict): Validation loss dictionary.
     """
 
+    if batch_size != None:
+        batch_size_for_evaluation_training = batch_size
+        batch_size_for_evaluation_validation = batch_size
+    else:
+        batch_size_for_evaluation_training = dset_train.NN_xx
+        batch_size_for_evaluation_validation = dset_val.NN_xx
+        
     # Evaluate training and validation loss
     train_loss = eval_dataset(
-        dset=dset_train, batch_size=batch_size, model_encoder=model_encoder, model_downstream=model_downstream,
+        dset=dset_train, batch_size=batch_size_for_evaluation_training, model_encoder=model_encoder, model_downstream=model_downstream,
         loss_function_dict=loss_function_dict, seed=seed, device=device
     )
 
     val_loss = eval_dataset(
-        dset=dset_val, batch_size=batch_size, model_encoder=model_encoder, model_downstream=model_downstream,
+        dset=dset_val, batch_size=batch_size_for_evaluation_validation, model_encoder=model_encoder, model_downstream=model_downstream,
         loss_function_dict=loss_function_dict, seed=seed, device=device
     )
 

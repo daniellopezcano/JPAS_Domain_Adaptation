@@ -910,9 +910,16 @@ def plot_training_curves(path_save):
     # Mark minimum validation loss
     axes[0].axvline(epoch_min, color='gray', linestyle='--', lw=1.5, alpha=0.7)
     axes[0].plot(epoch_min, val_min, 'ro', markersize=8)
-    axes[0].annotate(f"Min @ {epoch_min}", xy=(epoch_min, val_min),
-                     xytext=(epoch_min + 3, val_min + 0.01),
-                     fontsize=12, arrowprops=dict(arrowstyle='->', lw=1.5))
+    axes[0].annotate(
+        f"Min @ {epoch_min}",
+        xy=(epoch_min, val_min),           # point to the minimum (data coords)
+        xycoords='data',
+        xytext=(0.98, 0.98),               # place text at top-right of the axes
+        textcoords='axes fraction',
+        ha='right', va='top',
+        fontsize=12,
+        arrowprops=dict(arrowstyle='->', lw=1.5)
+    )
 
     axes[0].set_ylabel("Loss", fontsize=22)
     axes[0].tick_params(axis='both', which='major', labelsize=14)
@@ -930,7 +937,7 @@ def plot_training_curves(path_save):
         mpl.lines.Line2D([0], [0], color='green', ls='-', lw=2)
     ]
     custom_labels = ["Train Loss", "Validation Loss", "Learning Rate"]
-    legend = axes[0].legend(custom_lines, custom_labels, loc='upper right', fancybox=True, shadow=True, fontsize=14)
+    legend = axes[0].legend(custom_lines, custom_labels, loc='upper left', fancybox=True, shadow=True, fontsize=14)
     axes[0].add_artist(legend)
 
     plt.tight_layout()

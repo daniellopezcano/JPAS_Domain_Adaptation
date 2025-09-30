@@ -11,6 +11,7 @@ import pandas as pd
 
 from math import ceil
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import Normalize
@@ -20,6 +21,7 @@ from matplotlib import ticker as mticker
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 from sklearn.manifold import TSNE
+from sklearn.metrics import roc_curve, auc as sk_auc
 
 from scipy.stats import binned_statistic_2d
 from scipy.ndimage import gaussian_filter
@@ -140,221 +142,26 @@ def tsne_per_key(
     # Optionally, you could also return kept_indices if you need to map back
     return out
 
-def plot_overall_deltaF1_two_comparisons(
-    y_true_src,              # DESI_mocks_Raul test labels
-    y_pred_src_noDA,         # probs no-DA on source test
-    y_true_tgt,              # JPAS_x_DESI_Raul test labels
-    y_pred_tgt_noDA,         # probs no-DA on target test
-    y_pred_tgt_DA,           # probs DA on target test
-    class_names,
-    *,
-    title="ΔF1 per class (overall)",
-    colors=("royalblue", "darkorange"),           # (Target no-DA − Source no-DA, Target DA − Target no-DA)
-    labels=("Target no-DA − Source no-DA", "Target DA − Target no-DA"),
-    figsize=(11, 6),
-    ylim=(-0.5, 0.5),
-    alpha=0.9,
-    edgecolor="black",
-    bar_width=0.36,
-    legend_kwargs=None,                            # e.g. {"loc":"upper right", "frameon":True}
-    show=True,
-    save_dir=None, save_format="png", save_dpi=200, filename="deltaF1_overall_combined"
-):
-    """
-    One grouped-bar figure with two bars per class:
-      - ΔF1_1 = F1(Target no-DA) − F1(Source no-DA)
-      - ΔF1_2 = F1(Target DA)    − F1(Target no-DA)
-    """
-    n_classes = len(class_names)
-
-    def _f1_per_class(y_true, y_pred_probs):
-        if len(y_true) == 0:
-            return np.zeros(n_classes, dtype=float)
-        y_pred = np.argmax(y_pred_probs, axis=1)
-        return f1_score(y_true, y_pred, labels=np.arange(n_classes), average=None, zero_division=0)
-
-    # --- Compute per-class F1s
-    f1_src_noDA = _f1_per_class(y_true_src,  y_pred_src_noDA)
-    f1_tgt_noDA = _f1_per_class(y_true_tgt,  y_pred_tgt_noDA)
-    f1_tgt_DA   = _f1_per_class(y_true_tgt,  y_pred_tgt_DA)
-
-    # --- Deltas with your convention
-    delta_target_noDA_minus_source_noDA = f1_tgt_noDA - f1_src_noDA
-    delta_target_DA_minus_target_noDA   = f1_tgt_DA   - f1_tgt_noDA
-
-    # --- Plot
-    x = np.arange(n_classes)
-    fig, ax = plt.subplots(figsize=figsize)
-
-    ax.bar(x - bar_width/2, delta_target_noDA_minus_source_noDA, width=bar_width,
-           color=colors[0], alpha=alpha, edgecolor=edgecolor, label=labels[0])
-    ax.bar(x + bar_width/2, delta_target_DA_minus_target_noDA, width=bar_width,
-           color=colors[1], alpha=alpha, edgecolor=edgecolor, label=labels[1])
-
-    ax.axhline(0.0, color="black", linewidth=1)
-    ax.set_xticks(x)
-    ax.set_xticklabels(class_names, rotation=20, ha="right")
-    ax.set_ylabel("ΔF1")
-    ax.set_xlabel("Class")
-    ax.set_title(title)
-    ax.set_ylim(*ylim)
-    if legend_kwargs is None:
-        legend_kwargs = {"loc": "upper right", "frameon": True}
-    ax.legend(**legend_kwargs)
-
-    ax.grid(axis="y", linestyle=":", alpha=0.4)
-    fig.tight_layout()
-
-    # Save if requested
-    if save_dir is not None:
-        Path(save_dir).mkdir(parents=True, exist_ok=True)
-        out_path = Path(save_dir) / f"{filename}.{save_format}"
-        fig.savefig(out_path, dpi=save_dpi, bbox_inches="tight")
-
-    if show:
-        plt.show()
-
-    return fig, ax
-
-
-def plot_overall_deltaF1_grouped(
-    comparisons,                 # list of (y_true_A, y_pred_A, y_true_B, y_pred_B[, label])
-    class_names,
-    *,
-    title="ΔF1 per class (overall)",
-    colors=None,                 # list of N colors; None -> use matplotlib cycle
-    labels=None,                 # list of N legend labels; None -> use provided tuple labels or generic
-    figsize=(12, 6),
-    ylim=None,                   # (ymin, ymax); None -> symmetric from data
-    alpha=0.9,
-    edgecolor="black",
-    group_width=0.80,            # total width occupied by all bars in a class group (0..1)
-    bar_width=None,              # None -> group_width / N
-    xtick_rotation=20,
-    grid=True,
-    legend_kwargs=None,          # e.g. {"loc":"upper right", "frameon":True}
-    show=True,
-    save_dir=None, save_format="pdf", save_dpi=200, filename="deltaF1_grouped"
-):
-    """
-    Plot one figure with grouped bars per class for N comparisons.
-    Each comparison i contributes ΔF1_i = F1(B_i) - F1(A_i) for every class.
-
-    comparisons:
-      list of tuples: (y_true_A, y_pred_P_A, y_true_B, y_pred_P_B[, label])
-      - y_pred_P_* are softmax probabilities with shape [n_samples, n_classes]
-      - optional label at the end can be omitted; then labels=... controls legend
-    """
-    n_classes = len(class_names)
-
-    def _f1_per_class(y_true, y_pred_probs):
-        if len(y_true) == 0:
-            return np.zeros(n_classes, dtype=float)
-        y_pred = np.argmax(y_pred_probs, axis=1)
-        # Use labels=range(n_classes) so missing classes map to 0 gracefully
-        return f1_score(y_true, y_pred, labels=np.arange(n_classes), average=None, zero_division=0)
-
-    # --- Compute ΔF1 for all comparisons ---
-    deltas = []
-    inferred_labels = []
-    for tup in comparisons:
-        if len(tup) == 5:
-            yA, pA, yB, pB, lab = tup
-        else:
-            yA, pA, yB, pB = tup
-            lab = None
-        f1A = _f1_per_class(yA, pA)
-        f1B = _f1_per_class(yB, pB)
-        deltas.append(f1B - f1A)
-        inferred_labels.append(lab if lab is not None else "ΔF1")
-
-    deltas = np.asarray(deltas)          # shape (N, n_classes)
-    N = deltas.shape[0]
-    x = np.arange(n_classes)
-
-    # --- Colors / labels ---
-    if colors is None:
-        cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
-        colors = [cycle[i % len(cycle)] if cycle else "C{}".format(i) for i in range(N)]
-    else:
-        if len(colors) < N:
-            colors = colors + [colors[-1]] * (N - len(colors))
-        colors = colors[:N]
-
-    if labels is None:
-        labels = inferred_labels
-    else:
-        if len(labels) < N:
-            labels = list(labels) + [f"ΔF1 {i+1}"] * (N - len(labels))
-        labels = labels[:N]
-
-    # --- Bar geometry ---
-    if bar_width is None:
-        bar_width = group_width / max(1, N)
-    offsets = (np.arange(N) - (N - 1) / 2.0) * bar_width  # centered around each class position
-
-    # --- y-limits (symmetric if not provided) ---
-    if ylim is None:
-        max_abs = float(np.max(np.abs(deltas))) if deltas.size else 0.0
-        pad = 0.05 if max_abs == 0 else 0.1 * max_abs
-        ylim = (-max_abs - pad, max_abs + pad)
-
-    # --- Plot ---
-    fig, ax = plt.subplots(figsize=figsize)
-
-    for i in range(N):
-        ax.bar(
-            x + offsets[i], deltas[i], width=bar_width,
-            color=colors[i], alpha=alpha, edgecolor=edgecolor, label=labels[i]
-        )
-
-    ax.axhline(0.0, color="black", linewidth=1)
-    ax.set_ylim(*ylim)
-    ax.set_xticks(x)
-    ax.set_xticklabels(class_names, rotation=xtick_rotation, ha="right")
-    ax.set_ylabel("ΔF1")
-    ax.set_xlabel("Class")
-    ax.set_title(title)
-    if grid:
-        ax.grid(axis="y", linestyle=":", alpha=0.4)
-
-    if legend_kwargs is None:
-        legend_kwargs = {"loc": "upper right", "frameon": True}
-    ax.legend(**legend_kwargs)
-
-    fig.tight_layout()
-
-    # --- Save if requested ---
-    if save_dir is not None:
-        Path(save_dir).mkdir(parents=True, exist_ok=True)
-        out_path = Path(save_dir) / f"{filename}.{save_format}"
-        fig.savefig(out_path, dpi=save_dpi, bbox_inches="tight")
-
-    if show:
-        plt.show()
-
-    return fig, ax, deltas
-
-
-
 def radar_plot(
     dict_radar: dict,
     class_names,
     *,
     title: str = None,
     title_pad: float = 20,
-    figsize=(10, 10),
+    figsize=(8, 8),
     theta_offset=np.pi/2,
     theta_direction=-1,
-    r_ticks=(0.2, 0.4, 0.6, 0.8, 1.0),
+    r_ticks=(0.1, 0.3, 0.5, 0.7, 0.9),
     r_lim=(0.0, 1.0),
-    tick_labelsize=14,
+    tick_labelsize=17,
     radial_labelsize=12,
     linewidth_default=2.0,
     show_legend=True,
-    legend_kwargs=None,
+    legend_kwargs={
+        "loc": "upper left", "bbox_to_anchor": (0.73, 1.0), "fontsize": 15, "ncol": 1,
+        "title": None, "frameon": True, "fancybox": True, "shadow": True, "borderaxespad": 0.0,
+    },
     close_line=True,
-    # NEW: fill controls (global defaults; can be overridden per case in plot_kwargs)
     fill_default=True,
     fill_alpha_default=0.18,
 ):
@@ -487,417 +294,6 @@ def radar_plot(
 
     plt.tight_layout()
     return fig, ax
-
-
-def evaluate_all_plots_by_mag_bins(
-    masks_magnitudes: dict,
-    yy: dict,
-    probs: dict,
-    class_names,
-    *,
-    dict_radar_styles: dict = None,   # template dict to copy plot_kwargs (values under ['plot_kwargs'])
-    radar_title_base: str = "F1 Radar Plot",
-    radar_kwargs: dict = None,        # forwarded to radar_plot
-    colors=None,                      # e.g., ['blue','green','orange','red']  (per-bin color)
-    colormaps=None,                   # e.g., [plt.cm.Blues, plt.cm.Greens, plt.cm.YlOrBr, plt.cm.Reds] (per-bin cmap)
-    show: bool = True,
-    # ------- saving controls -------
-    save_dir: str = None,             # folder to save figures; if None, don't save
-    save_format: str = "png",
-    save_dpi: int = 200,
-    close_after_save: bool = False,   # close figs after saving (useful when show=False in loops)
-    required_entries = [
-        ("Mocks", "Test"),
-        ("JPAS x DESI", "Test"),
-        ("JPAS x DESI", "Train"),  # only to align available bins; not plotted
-    ]
-):
-    """
-    Per magnitude bin:
-      - Confusion matrices for:
-          * no-DA Source-Test (Mocks)
-          * no-DA Target-Test (JPAS x DESI)
-          * DA   Target-Test (JPAS x DESI)
-      - Radar plot for the 3 cases above (all lines use the bin's color; styles differentiate cases)
-      - Two set-performance comparisons (both use the bin's color):
-          * Source no-DA (Mocks Test) vs Target no-DA (JPAS Test)
-          * Target no-DA (JPAS Test) vs DA (JPAS Test)
-
-    NEW (combined):
-      - One combined radar plot overlaying all magnitude bins (color-coded by bin)
-      - Two combined ΔF1 histograms (one per comparison), grouped by class with one bar per bin.
-
-    DA-Train plots and TPR comparison are intentionally omitted.
-    """
-    # ---------------- helpers ----------------
-    def _bin_tag(lo, hi):
-        fmt = lambda v: str(v).replace('.', 'p')
-        return f"mag_{fmt(lo)}-{fmt(hi)}"
-
-    def _sanitize(name):
-        return re.sub(r"[^A-Za-z0-9._\-]+", "_", name)
-
-    def _save_current(fig, filename):
-        if not save_dir:
-            return
-        out_dir = Path(save_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        fpath = out_dir / filename
-        fig.savefig(fpath, dpi=save_dpi, bbox_inches="tight")
-
-    def _f1_per_class(y_true, y_pred_probs, n_classes):
-        if len(y_true) == 0:
-            return np.zeros(n_classes, dtype=float)
-        y_pred = np.argmax(y_pred_probs, axis=1)
-        return f1_score(y_true, y_pred, labels=np.arange(n_classes), average=None, zero_division=0)
-
-    def _plot_combined_deltaF1_hist(
-            delta_by_bin: dict, *, title: str, colors_for_bins: list,
-            class_names: list, ylim=(-0.5, 0.5), figsize=(11, 6),
-            required_entries = [
-                ("Mocks", "Test"),
-                ("JPAS x DESI", "Test"),
-                ("JPAS x DESI", "Train"),  # only to align available bins; not plotted
-            ]
-        ):
-        """
-        delta_by_bin: dict {bin_label: np.ndarray(n_classes,)}
-        One grouped bar chart: per class, bars for each bin (colored by bin color).
-        """
-        bins_list = list(delta_by_bin.keys())
-        B = len(bins_list)
-        C = len(class_names)
-        x = np.arange(C)
-        width = 0.8 / max(B, 1)  # pack bars within class group
-
-        fig, ax = plt.subplots(figsize=figsize)
-        for b_idx, bin_lbl in enumerate(bins_list):
-            deltas = delta_by_bin[bin_lbl]
-            # offset within the class group
-            offset = (b_idx - (B - 1) / 2) * width
-            ax.bar(x + offset, deltas, width=width, color=colors_for_bins[b_idx % len(colors_for_bins)],
-                   edgecolor="black", alpha=0.85, label=bin_lbl)
-
-        ax.axhline(0.0, color="black", linewidth=1)
-        ax.set_xticks(x)
-        ax.set_xticklabels(class_names, rotation=20, ha="right")
-        ax.set_ylabel("ΔF1")
-        ax.set_xlabel("Class")
-        ax.set_title(title)
-        ax.set_ylim(*ylim)
-        ax.legend(title="Magnitude bins", ncol=B, fontsize=9, frameon=True)
-        fig.tight_layout()
-        return fig, ax
-
-    # -----------------------------------------
-    if colors is None:
-        colors = ['blue', 'green', 'orange', 'red']
-    if colormaps is None:
-        colormaps = [plt.cm.Blues, plt.cm.Greens, plt.cm.YlOrBr, plt.cm.Reds]
-
-    # Intersect bins across required entries
-    bins_sets = []
-    for entry in required_entries:
-        entry_bins = [k for k in masks_magnitudes.get(entry, {}).keys() if isinstance(k, tuple) and len(k) == 2]
-        if not entry_bins:
-            print(f"[WARN] No bins found for entry {entry}; skipping all.")
-            return
-        bins_sets.append(set(entry_bins))
-    common_bins = sorted(set.intersection(*bins_sets), key=lambda x: (x[0], x[1]))
-    if not common_bins:
-        print("[WARN] No common magnitude bins across required entries.")
-        return
-
-    # Pull plot styles (if provided) for radar lines
-    styles = {}
-    if dict_radar_styles is not None:
-        for key, spec in dict_radar_styles.items():
-            if "plot_kwargs" in spec:
-                styles[key] = dict(spec["plot_kwargs"])  # copy
-
-    # Defaults if not provided
-    styles.setdefault("JPAS Obs. Fully_Supervised", {
-        "linestyle": "-", "linewidth": 1.0, "color": "k",
-        "marker": "s", "markersize": 10.0, "label": "JPAS Obs. Fully_Supervised", "fill_alpha": 0.0
-    })
-    styles.setdefault("Mocks no-DA", {
-        "linestyle": "--", "linewidth": 2.0, "color": "royalblue",
-        "marker": "^", "markersize": 10.0, "label": "Mocks no-DA"
-    })
-    styles.setdefault("JPAS Obs. no-DA", {
-        "linestyle": "-.", "linewidth": 2.0, "color": "crimson",
-        "marker": "X", "markersize": 10.0, "label": "JPAS Obs. no-DA"
-    })
-    styles.setdefault("JPAS Obs. (Train) DA", {
-        "linestyle": ":", "linewidth": 2.0, "color": "orange",
-        "marker": "+", "markersize": 10.0, "label": "TJPAS Obs. (Train) DA"
-    })
-    styles.setdefault("TJPAS Obs. DA", {
-        "linestyle": "-", "linewidth": 2.0, "color": "limegreen",
-        "marker": "o", "markersize": 10.0, "label": "JPAS Obs. DA"
-    })
-
-    # Defaults for radar kwargs (can be overridden via radar_kwargs)
-    _radar_kwargs = dict(
-        figsize=(8, 8),
-        theta_offset=np.pi / 2,
-        r_ticks=(0.1, 0.3, 0.5, 0.7, 0.9),
-        r_lim=(0.0, 1.0),
-        tick_labelsize=16,
-        radial_labelsize=12,
-        show_legend=True,
-        legend_kwargs={
-            "loc": "upper left", "bbox_to_anchor": (0.73, 1.0), "fontsize": 9, "ncol": 1,
-            "title": "Evaluation Cases", "frameon": True, "fancybox": True,
-            "shadow": True, "borderaxespad": 0.0,
-        },
-        title_pad=20,
-    )
-    if radar_kwargs:
-        _radar_kwargs.update(radar_kwargs)
-
-    # === COMBINED ACCUMULATORS ===
-    # 1) Combined radar: build a giant dict_radar with entries (case×bin) each colored by the bin color.
-    dict_radar_combined = {}
-
-    # 2) Combined ΔF1 per comparison, per bin
-    delta_tgt_vs_src_noDA_by_bin = {}  # bin_label -> (n_classes,)
-    delta_tgt_DA_vs_noDA_by_bin = {}   # bin_label -> (n_classes,)
-
-    n_classes = len(class_names)
-
-    for bin_idx, (lo, hi) in enumerate(common_bins):
-        bin_label = f"({lo}, {hi}]"
-        tag = _bin_tag(lo, hi)
-        print(f"\n=== Magnitude bin {bin_label} ===")
-
-        # Per-bin color/cmap
-        color_this_bin = colors[bin_idx % len(colors)]
-        cmap_this_bin  = colormaps[bin_idx % len(colormaps)]
-
-        # --- Masks ---
-        m_mocks_test = masks_magnitudes[("Mocks", "Test")][(lo, hi)]
-        m_jpas_train = masks_magnitudes[("JPAS x DESI", "Train")][(lo, hi)]
-        m_jpas_test  = masks_magnitudes[("JPAS x DESI", "Test")][(lo, hi)]
-
-        # --- Slices ---
-        y_true_src = yy["DESI_mocks_Raul"]["test"]["SPECTYPE_int"][m_mocks_test]
-        y_pred_src_noDA = probs["no-DA"]["DESI_mocks_Raul"]["test"][m_mocks_test]
-
-        y_true_tgt_train = yy["JPAS_x_DESI_Raul"]["train"]["SPECTYPE_int"][m_jpas_train]
-        y_pred_tgt_train_DA = probs["DA"]["JPAS_x_DESI_Raul"]["train"][m_jpas_train]
-
-        y_true_tgt_test = yy["JPAS_x_DESI_Raul"]["test"]["SPECTYPE_int"][m_jpas_test]
-        y_pred_tgt_test_direct = probs["Fully_Supervised"]["JPAS_x_DESI_Raul"]["test"][m_jpas_test]
-        y_pred_tgt_test_noDA = probs["no-DA"]["JPAS_x_DESI_Raul"]["test"][m_jpas_test]
-        y_pred_tgt_test_DA = probs["DA"]["JPAS_x_DESI_Raul"]["test"][m_jpas_test]
-
-        def _nonempty(*arrs):
-            return all(len(a) > 0 for a in arrs)
-
-        # --- Confusion matrices (3) ---
-        if _nonempty(y_true_src, y_pred_src_noDA):
-            res = plot_confusion_matrix(
-                y_true_src, y_pred_src_noDA,
-                class_names=class_names, cmap=cmap_this_bin,
-                title=f"no-DA Source-Test (Mocks)  {bin_label}"
-            )
-            fig_cm = res[0] if (isinstance(res, tuple) and hasattr(res[0], "savefig")) else (res if hasattr(res, "savefig") else plt.gcf())
-            _save_current(fig_cm, _sanitize(f"cm_noDA_Source-Test_Mocks_{tag}.{save_format}"))
-            if close_after_save and save_dir: plt.close(fig_cm)
-
-        if _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA):
-            res = plot_confusion_matrix(
-                y_true_tgt_test, y_pred_tgt_test_noDA,
-                class_names=class_names, cmap=cmap_this_bin,
-                title=f"no-DA Target-Test (JPAS x DESI)  {bin_label}"
-            )
-            fig_cm = res[0] if (isinstance(res, tuple) and hasattr(res[0], "savefig")) else (res if hasattr(res, "savefig") else plt.gcf())
-            _save_current(fig_cm, _sanitize(f"cm_noDA_Target-Test_JPASxDESI_{tag}.{save_format}"))
-            if close_after_save and save_dir: plt.close(fig_cm)
-
-        if _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
-            res = plot_confusion_matrix(
-                y_true_tgt_test, y_pred_tgt_test_DA,
-                class_names=class_names, cmap=cmap_this_bin,
-                title=f"DA Target-Test (JPAS x DESI)  {bin_label}"
-            )
-            fig_cm = res[0] if (isinstance(res, tuple) and hasattr(res[0], "savefig")) else (res if hasattr(res, "savefig") else plt.gcf())
-            _save_current(fig_cm, _sanitize(f"cm_DA_Target-Test_JPASxDESI_{tag}.{save_format}"))
-            if close_after_save and save_dir: plt.close(fig_cm)
-
-        # --- Per-bin radar (as before) ---
-        dict_radar_bin = {
-            "JPAS Obs. Fully_Supervised": {
-                "y_true": y_true_tgt_test,
-                "y_pred": y_pred_tgt_test_direct,
-                "plot_kwargs": {**styles["JPAS Obs. Fully_Supervised"], "color": color_this_bin},
-            },
-            "Mocks no-DA": {
-                "y_true": y_true_src,
-                "y_pred": y_pred_src_noDA,
-                "plot_kwargs": {**styles["Mocks no-DA"], "color": color_this_bin},
-            },
-            "JPAS Obs. no-DA": {
-                "y_true": y_true_tgt_test,
-                "y_pred": y_pred_tgt_test_noDA,
-                "plot_kwargs": {**styles["JPAS Obs. no-DA"], "color": color_this_bin},
-            },
-            "JPAS Obs. (Train) DA": {
-                "y_true": y_true_tgt_test,
-                "y_pred": y_pred_tgt_test_noDA,
-                "plot_kwargs": {**styles["JPAS Obs. (Train) DA"], "color": color_this_bin},
-            },
-            "JPAS Obs. DA": {
-                "y_true": y_true_tgt_test,
-                "y_pred": y_pred_tgt_test_DA,
-                "plot_kwargs": {**styles["JPAS Obs. DA"], "color": color_this_bin},
-            },
-        }
-        if any(len(v["y_true"]) > 0 for v in dict_radar_bin.values()):
-            fig_radar, ax_radar = radar_plot(
-                dict_radar=dict_radar_bin,
-                class_names=class_names,
-                title=f"{radar_title_base}  {bin_label}",
-                **_radar_kwargs,
-            )
-            _save_current(fig_radar, _sanitize(f"radar_{tag}.{save_format}"))
-            if close_after_save and save_dir: plt.close(fig_radar)
-
-        # --- Accumulate for COMBINED radar: split into (case×bin) items ---
-        # Keep linestyles by case, override color by bin, and append bin tag to label.
-        for case_key in ("JPAS Obs. Fully_Supervised",
-                         "Mocks no-DA",
-                         "JPAS Obs. no-DA",
-                         "JPAS Obs. (Train) DA",
-                         "JPAS Obs. DA"):
-            if case_key == "JPAS Obs. Fully_Supervised" and _nonempty(y_true_src, y_pred_src_noDA):
-                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
-                    "y_true": y_true_src,
-                    "y_pred": y_pred_src_noDA,
-                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
-                }
-            elif case_key == "Mocks no-DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA):
-                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
-                    "y_true": y_true_tgt_test,
-                    "y_pred": y_pred_tgt_test_noDA,
-                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
-                }
-            elif case_key == "JPAS Obs. no-DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
-                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
-                    "y_true": y_true_tgt_test,
-                    "y_pred": y_pred_tgt_test_DA,
-                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
-                }
-            elif case_key == "JPAS Obs. (Train) DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
-                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
-                    "y_true": y_true_tgt_test,
-                    "y_pred": y_pred_tgt_test_DA,
-                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
-                }
-            elif case_key == "JPAS Obs. DA" and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
-                dict_radar_combined[f"{case_key} [{bin_label}]"] = {
-                    "y_true": y_true_tgt_test,
-                    "y_pred": y_pred_tgt_test_DA,
-                    "plot_kwargs": {**styles[case_key], "color": color_this_bin, "label": f"{case_key} [{bin_label}]"},
-                }
-
-        # --- Compute ΔF1 per bin for the two comparisons ---
-        if _nonempty(y_true_src, y_pred_src_noDA) and _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA):
-            f1_src_noDA = _f1_per_class(y_true_src, y_pred_src_noDA, n_classes)
-            f1_tgt_noDA = _f1_per_class(y_true_tgt_test, y_pred_tgt_test_noDA, n_classes)
-            delta_tgt_vs_src_noDA_by_bin[bin_label] = f1_tgt_noDA - f1_src_noDA
-
-        if _nonempty(y_true_tgt_test, y_pred_tgt_test_noDA) and _nonempty(y_true_tgt_test, y_pred_tgt_test_DA):
-            f1_tgt_noDA = _f1_per_class(y_true_tgt_test, y_pred_tgt_test_noDA, n_classes)
-            f1_tgt_DA   = _f1_per_class(y_true_tgt_test, y_pred_tgt_test_DA, n_classes)
-            delta_tgt_DA_vs_noDA_by_bin[bin_label] = f1_tgt_DA - f1_tgt_noDA
-
-        if show and not close_after_save:
-            plt.show()
-
-    # ================== COMBINED PLOTS ==================
-
-    # --- Combined radar over all bins ---
-    if dict_radar_combined:
-        fig_cr, ax_cr = radar_plot(
-            dict_radar=dict_radar_combined,
-            class_names=class_names,
-            title=f"{radar_title_base} — Combined bins",
-            **_radar_kwargs,
-        )
-        _save_current(fig_cr, _sanitize(f"radar_combined.{save_format}"))
-        if close_after_save and save_dir: plt.close(fig_cr)
-
-    # --- Combined ΔF1 histograms ---
-    # Colors per bin in order of bins encountered in the dict
-    def _colors_for_bins(delta_dict):
-        bins_list = list(delta_dict.keys())
-        return [colors[common_bins.index(tuple(map(float, b.strip("()").split(", ")))) % len(colors)]
-                if isinstance(b, str) and ", " in b
-                else colors[i % len(colors)]
-                for i, b in enumerate(bins_list)]
-
-    if delta_tgt_vs_src_noDA_by_bin:
-        bins_colors = [colors[i % len(colors)] for i in range(len(delta_tgt_vs_src_noDA_by_bin))]
-        fig_d1, ax_d1 = _plot_combined_deltaF1_hist(
-            delta_tgt_vs_src_noDA_by_bin,
-            title="JPAS Obs. VS Mocks (no-DA)",
-            colors_for_bins=bins_colors,
-            class_names=class_names,
-            ylim=(-0.78, 0.15),
-            required_entries=required_entries
-        )
-        _save_current(fig_d1, _sanitize(f"deltaF1_Source_vs_Target_noDA_combined.{save_format}"))
-        if close_after_save and save_dir: plt.close(fig_d1)
-
-    if delta_tgt_DA_vs_noDA_by_bin:
-        bins_colors = [colors[i % len(colors)] for i in range(len(delta_tgt_DA_vs_noDA_by_bin))]
-        fig_d2, ax_d2 = _plot_combined_deltaF1_hist(
-            delta_tgt_DA_vs_noDA_by_bin,
-            title="DA VS no-DA (JPAS Obs.)",
-            colors_for_bins=bins_colors,
-            class_names=class_names,
-            ylim=(-0.15, 0.35),
-            required_entries=required_entries
-        )
-        _save_current(fig_d2, _sanitize(f"deltaF1_Target_noDA_vs_DA_combined.{save_format}"))
-        if close_after_save and save_dir: plt.close(fig_d2)
-
-def assert_array_lists_equal(list1, list2, rtol=1e-5, atol=1e-8) -> bool:
-    """
-    Compare two lists of NumPy arrays and log results for each comparison.
-
-    Parameters:
-    ----------
-    list1, list2 : list of np.ndarray
-        Lists to compare.
-    rtol, atol : float
-        Tolerances for np.allclose comparison.
-
-    Returns:
-    --------
-    all_match : bool
-        True if all arrays match, False otherwise.
-    """
-    if len(list1) != len(list2):
-        logging.error(f"❌ List lengths differ: {len(list1)} != {len(list2)}")
-        return False
-
-    all_match = True
-    for i, (arr1, arr2) in enumerate(zip(list1, list2)):
-        if np.allclose(arr1, arr2, rtol=rtol, atol=atol):
-            logging.debug(f"✅ Arrays at index {i} match.")
-        else:
-            logging.warning(f"❌ Arrays at index {i} differ.")
-            all_match = False
-
-    if all_match:
-        logging.info("🎉 All arrays match.")
-    else:
-        logging.info("⚠️ Some arrays differ.")
-
-    return all_match
 
 def compare_model_parameters(model1, model2, rtol=1e-5, atol=1e-8):
     """Compare parameters of two PyTorch models with optional tolerance.
@@ -1053,81 +449,6 @@ def plot_confusion_matrix(
 
     return cm
 
-def compare_TPR_confusion_matrices(
-    yy_true_val,
-    yy_pred_P_val,
-    yy_true_test,
-    yy_pred_P_test,
-    class_names,
-    figsize=(10, 8),
-    cmap='bwr',
-    title='Difference in Normalized Confusion Matrices (Test - Validation)',
-    name_1 = "Val",
-    name_2 = "Test"
-):
-    """
-    Compares full normalized confusion matrices (TPR-style) between test and validation datasets.
-
-    Parameters:
-    ----------
-    - yy_true_val: np.ndarray of true labels for validation set
-    - yy_pred_P_val: np.ndarray of predicted probabilities for validation set
-    - yy_true_test: np.ndarray of true labels for test set
-    - yy_pred_P_test: np.ndarray of predicted probabilities for test set
-    - class_names: list of class names
-    - figsize: size of the plot
-    - cmap: colormap for matrix difference
-    - title: title of the plot
-    """
-    yy_pred_val = np.argmax(yy_pred_P_val, axis=1)
-    yy_pred_test = np.argmax(yy_pred_P_test, axis=1)
-    num_classes = len(class_names)
-
-    def get_normalized_confusion_matrix(y_true, y_pred, num_classes):
-        cm = np.zeros((num_classes, num_classes), dtype=np.float32)
-        for t, p in zip(y_true, y_pred):
-            cm[int(t), int(p)] += 1
-        row_sums = cm.sum(axis=1, keepdims=True)
-        with np.errstate(invalid='ignore', divide='ignore'):
-            cm_normalized = np.divide(cm, row_sums, where=row_sums != 0)
-        return cm_normalized, cm.astype(int)
-
-    cm_val_norm, cm_val_raw = get_normalized_confusion_matrix(yy_true_val, yy_pred_val, num_classes)
-    cm_test_norm, cm_test_raw = get_normalized_confusion_matrix(yy_true_test, yy_pred_test, num_classes)
-    cm_diff = cm_test_norm - cm_val_norm
-
-    fig, ax = plt.subplots(figsize=figsize)
-    im = ax.imshow(cm_diff, interpolation='nearest', cmap=cmap, vmin=-1, vmax=1)
-
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.ax.tick_params(labelsize=11)
-    cbar.set_label("TPR("+name_2+") - TPR("+name_1+")", fontsize=12)
-
-    ax.set_xticks(np.arange(num_classes))
-    ax.set_yticks(np.arange(num_classes))
-    ax.set_xticklabels(class_names, fontsize=12)
-    ax.set_yticklabels(class_names, fontsize=12)
-    ax.set_xlabel('Predicted Label', fontsize=14)
-    ax.set_ylabel('True Label', fontsize=14)
-    ax.set_title(title, fontsize=15)
-    plt.setp(ax.get_xticklabels(), rotation=15, ha="right", rotation_mode="anchor")
-
-    for i in range(num_classes):
-        for j in range(num_classes):
-            val_pct = cm_val_norm[i, j] * 100
-            test_pct = cm_test_norm[i, j] * 100
-            diff_pct = cm_diff[i, j] * 100
-            text_color = "white" if abs(cm_diff[i, j]) > 0.5 else "black"
-            ax.text(
-                j, i,
-                f"{name_1}:{val_pct:.1f}%\n{name_2}:{test_pct:.1f}%\nΔ:{diff_pct:+.1f}%",
-                ha="center", va="center", color=text_color, fontsize=9,
-                fontweight='bold' if i == j else 'normal'
-            )
-
-    plt.tight_layout()
-    plt.show()
-
 def compute_ece(y_true, y_pred_P, n_bins=10):
     y_conf = np.max(y_pred_P, axis=1)
     y_pred = np.argmax(y_pred_P, axis=1)
@@ -1143,11 +464,526 @@ def compute_ece(y_true, y_pred_P, n_bins=10):
             ece += np.abs(acc - conf) * np.sum(mask) / len(y_true)
     return ece
 
-def make_colored_diff(val, is_higher_better=True):
-    if np.isnan(val):
-        return "       NaN    "
-    color = "\033[92m" if (val > 0 and is_higher_better) or (val < 0 and not is_higher_better) else "\033[91m"
-    return f"{color}{val:12.4f}\033[0m"
+def plot_multiclass_rocs(
+    *,
+    dict_cases,                      # {case: {"y_true": (N,), "y_pred": (N,C), "plot_kwargs": {...}}}
+    class_names=None,               # list[str] in y_pred column order; if None -> inferred from labels
+    class_colors=None,              # dict{name->color} OR list[str] of length C; if None -> use per-CASE colors from dict_cases
+    class_legend_loc="lower right",
+    case_legend_loc="lower left",
+    figsize=(8, 8),
+    title=None,
+    legend_fontsize=14,
+    # --- AUC text box options ---
+    draw_auc_text=True,
+    auc_fontsize=9,
+    auc_box_facecolor="white",
+    auc_box_alpha=0.9,
+    auc_text_dx=0.0,
+    auc_text_dy=0.0,
+    auc_text_spread=0.0,
+    # --- axes & cosmetics ---
+    x_lims=(0.0, 1.0),
+    y_lims=(0.0, 1.0),
+    x_label="False Positive Rate",
+    y_label="True Positive Rate",
+    diagonal_kwargs=None,
+    linewidth_default=2.0,
+    marker_every=None,
+):
+    """
+    Single-panel multi-class ROC overlay.
+
+    Coloring rule:
+      - If class_colors is None (default): color curves by CASE using
+        dict_cases[case]['plot_kwargs']['color'] (if missing, fall back to Matplotlib cycle).
+      - Else: color curves by CLASS using class_colors (original behavior).
+    """
+    if not dict_cases:
+        raise ValueError("dict_cases must contain at least one case.")
+
+    case_names = list(dict_cases.keys())
+
+    # Infer classes
+    if class_names is None:
+        all_y = np.concatenate([np.asarray(v["y_true"]) for v in dict_cases.values()])
+        classes = np.unique(all_y)
+        class_names_used = [str(c) for c in classes]
+    else:
+        class_names_used = list(class_names)
+        classes = np.arange(len(class_names_used))
+    C = len(classes)
+
+    # Validate shapes
+    for nm, payload in dict_cases.items():
+        y_pred = np.asarray(payload["y_pred"])
+        if y_pred.ndim != 2 or y_pred.shape[1] != C:
+            raise ValueError(f"[{nm}] y_pred must be (N,{C}). Got {y_pred.shape}.")
+
+    # --- Color logic ---
+    color_by_case = (class_colors is None)
+
+    if color_by_case:
+        # Build per-CASE color map from plot_kwargs (fallback to cycle)
+        cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
+        per_case_color = {}
+        for i, case in enumerate(case_names):
+            pkw = dict(dict_cases[case].get("plot_kwargs", {}))
+            col = pkw.get("color", (cycle[i % len(cycle)] if cycle else f"C{i}"))
+            per_case_color[case] = col
+        # For class legend later (if shown), use a neutral color since color no longer encodes class
+        cls_colors_list = ["black"] * C
+    else:
+        # Original: colors per CLASS
+        if isinstance(class_colors, dict):
+            cls_colors_list = [class_colors.get(class_names_used[i], plt.cm.tab10(i % 10)) for i in range(C)]
+        else:
+            if len(class_colors) != C:
+                raise ValueError("class_colors must have length equal to number of classes.")
+            cls_colors_list = list(class_colors)
+
+    # Figure
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Diagonal baseline
+    diag_kws = {"color": "0.85", "ls": "--", "lw": 1.0}
+    if isinstance(diagonal_kwargs, dict):
+        diag_kws.update(diagonal_kwargs)
+    ax.plot([0, 1], [0, 1], **diag_kws, zorder=1)
+
+    # Helper for marker thinning
+    def _markevery(n):
+        if marker_every is None:
+            return None
+        if isinstance(marker_every, int) and marker_every > 1:
+            return marker_every
+        if isinstance(marker_every, float) and 0 < marker_every < 1:
+            return max(1, int(n * marker_every))
+        return None
+
+    # Compute & plot ROC curves
+    curves = []
+    for i_cls, cls in enumerate(classes):
+        for case in case_names:
+            payload = dict_cases[case]
+            y_true = np.asarray(payload["y_true"]).astype(int)
+            y_pred = np.asarray(payload["y_pred"]).astype(float)
+            y_score = y_pred[:, i_cls]
+            y_bin = (y_true == cls).astype(int)
+
+            # style from case
+            pkw = dict(payload.get("plot_kwargs", {}))
+            ls = pkw.get("linestyle", "-")
+            lw = pkw.get("linewidth", linewidth_default)
+            marker = pkw.get("marker", None)
+            ms = pkw.get("markersize", 6)
+            label_case = pkw.get("label", case)
+
+            # --- choose color
+            if color_by_case:
+                color = per_case_color[case]
+            else:
+                color = cls_colors_list[i_cls]
+
+            # ROC (skip if not computable)
+            try:
+                fpr, tpr, _ = roc_curve(y_bin, y_score)
+            except Exception:
+                continue
+            AUC = sk_auc(fpr, tpr)
+
+            me = _markevery(len(fpr))
+            ax.plot(
+                fpr, tpr,
+                color=color,
+                linestyle=ls,
+                linewidth=lw,
+                marker=marker,
+                markersize=ms,
+                markevery=me,
+                label=f"{label_case} - {class_names_used[i_cls]}",
+                zorder=3,
+            )
+
+            curves.append({
+                "auc": AUC,
+                "fpr": fpr, "tpr": tpr,
+                "class_idx": i_cls,
+                "class_name": class_names_used[i_cls],
+                "case": label_case,
+                "color": color,
+                "linestyle": ls,
+                "linewidth": lw,
+            })
+
+    # Axes cosmetics
+    ax.set_xlim(*x_lims)
+    ax.set_ylim(*y_lims)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    if title:
+        ax.set_title(title)
+
+    # Legends
+    if color_by_case:
+        # Classes legend (neutral color; color no longer indicates class)
+        class_handles = [
+            Line2D([0], [0], color="black", lw=3, ls='-', label=class_names_used[i])
+            for i in range(C)
+        ]
+        leg_classes = ax.legend(handles=class_handles, loc=class_legend_loc,
+                                fontsize=legend_fontsize, title="Classes")
+        ax.add_artist(leg_classes)
+
+        # Cases legend — show case COLORS and styles
+        case_handles = []
+        for case in case_names:
+            pkw = dict(dict_cases[case].get("plot_kwargs", {}))
+            ls = pkw.get("linestyle", "-")
+            lw = pkw.get("linewidth", linewidth_default)
+            marker = pkw.get("marker", None)
+            ms = pkw.get("markersize", 6)
+            label_case = pkw.get("label", case)
+            case_handles.append(
+                Line2D([0], [0], color=per_case_color[case], lw=lw, ls=ls,
+                       marker=marker, markersize=ms, label=label_case)
+            )
+        ax.legend(handles=case_handles, loc=case_legend_loc, fontsize=legend_fontsize, title="Cases")
+    else:
+        # Original behavior: color encodes CLASS, cases shown in black
+        class_handles = [
+            Line2D([0], [0], color=cls_colors_list[i], lw=3, ls='-', label=class_names_used[i])
+            for i in range(C)
+        ]
+        leg_classes = ax.legend(handles=class_handles, loc=class_legend_loc,
+                                fontsize=legend_fontsize, title="Classes")
+        ax.add_artist(leg_classes)
+
+        case_handles = []
+        for case in case_names:
+            pkw = dict(dict_cases[case].get("plot_kwargs", {}))
+            ls = pkw.get("linestyle", "-")
+            lw = pkw.get("linewidth", linewidth_default)
+            marker = pkw.get("marker", None)
+            ms = pkw.get("markersize", 6)
+            label_case = pkw.get("label", case)
+            case_handles.append(
+                Line2D([0], [0], color="black", lw=lw, ls=ls, marker=marker, markersize=ms, label=label_case)
+            )
+        ax.legend(handles=case_handles, loc=case_legend_loc, fontsize=legend_fontsize, title="Cases")
+
+    # AUC text boxes
+    if draw_auc_text and curves:
+        curves.sort(key=lambda d: (d["class_idx"], d["case"]))
+        for k, rec in enumerate(curves):
+            fpr, tpr = rec["fpr"], rec["tpr"]
+            n = len(fpr)
+            if n == 0:
+                continue
+            d2 = (fpr - 1.0) ** 2 + (tpr - 0.0) ** 2
+            anchor_idx = int(np.argmax(d2))
+            step = max(1, int(auc_text_spread * n))
+            idx = int(np.clip(anchor_idx + k * step, 0, n - 1))
+            tx = float(fpr[idx]) + float(auc_text_dx)
+            ty = float(tpr[idx]) + float(auc_text_dy)
+            bbox = dict(
+                facecolor=auc_box_facecolor,
+                alpha=auc_box_alpha,
+                edgecolor=rec["color"],
+                boxstyle="round,pad=0.2",
+                linestyle=rec["linestyle"],
+                linewidth=max(1.2, rec["linewidth"] * 0.8),
+            )
+            ax.text(tx, ty, f"AUC={rec['auc']:.3f}", fontsize=auc_fontsize, color=rec["color"],
+                    ha="left", va="bottom", bbox=bbox)
+
+    return fig, ax
+
+def plot_confusion_matrices_grid(
+    *,
+    dict_cases,                         # {case_label: {"y_true": (N,), "y_pred": (N,C)}}
+    class_names,                        # list[str], length C
+    # --- Figure / layout ---
+    figsize=(18, 16),
+    dpi=150,
+    nrows=2,
+    ncols=None,                         # if None, computed from number of cases
+    constrained_layout=True,
+    grid_wspace=0.0,
+    grid_hspace=0.0,
+    # --- Normalization & colormap ---
+    normalize="row",                    # "row" | "col" | "none"
+    cmap="RdYlGn",
+    vmin=0,                          # None -> auto (0..1 for normalized; 0..max count for 'none')
+    vmax=1,
+    threshold_color=0.5,                # threshold for text color switch (normalized values)
+    # --- Text & fonts ---
+    fs_title=24,
+    fs_label=20,
+    fs_ticks=18,
+    fs_cell=14,
+    fs_cell_diag=14,
+    fs_cbar_label=20,
+    fs_cbar_ticks=16,
+    tick_rotation=20,
+    # --- Annotations & options ---
+    annotate_offdiag=True,              # draw counts + normalized % on off-diagonal cells
+    annotate_diagonal=True,             # draw TPR/PPV/F1 on the diagonal
+    percent_decimals=1,                 # decimals for % values
+    show_outer_labels=True,             # only show axes labels on outer edges
+    # --- Panel titles ---
+    panel_title_inside=False,           # if True, draw title inside panel (top-left)
+    panel_title_bbox=True,
+    panel_title_bbox_fc="white",
+    panel_title_bbox_alpha=0.85,
+    panel_title_color="black",
+    # --- Colorbar ---
+    add_colorbar=True,
+    cbar_orientation="vertical",        # "vertical" or "horizontal"
+    cbar_pad_fraction=0.05,             # width (if vertical) or height (if horizontal) fraction for cbar
+    cbar_ticks=(0.0, 0.25, 0.5, 0.75, 1.0),
+    cbar_label="True-label (row) normalized ratio",
+    # --- Output ---
+    save_path=None                      # e.g. "confusion_matrices.pdf"
+):
+    """
+    Plot a grid of confusion matrices for multiple cases, with a shared colorbar.
+
+    dict_cases: {
+        "Case label A": {"y_true": (N,), "y_pred": (N,C)},  # y_pred are probabilities or scores
+        "Case label B": {...},
+        ...
+    }
+    class_names: list of C class names in the probability column order of y_pred.
+
+    Normalization:
+      - "row": each row (true class) sums to 1 (default).
+      - "col": each column (pred class) sums to 1.
+      - "none": raw counts (shared vmax auto-computed if not given).
+    """
+    if not dict_cases:
+        raise ValueError("dict_cases must contain at least one case.")
+    case_labels = list(dict_cases.keys())
+    n_cases = len(case_labels)
+    C = len(class_names)
+
+    # Validate shapes
+    for name, payload in dict_cases.items():
+        y_true = np.asarray(payload["y_true"])
+        y_pred = np.asarray(payload["y_pred"])
+        if y_pred.ndim != 2 or y_pred.shape[1] != C:
+            raise ValueError(f"[{name}] y_pred must be (N,{C}). Got {y_pred.shape}.")
+
+    # Layout
+    if ncols is None:
+        ncols = int(np.ceil(n_cases / nrows))
+    # Colorbar occupies an extra column (if vertical) or row (if horizontal)
+    if add_colorbar:
+        if cbar_orientation == "vertical":
+            width_ratios = [1]*ncols + [cbar_pad_fraction]
+            height_ratios = [1]*nrows
+            total_cols = ncols + 1
+            total_rows = nrows
+            cbar_spec = ("right", slice(None))  # all rows, last column
+        else:
+            width_ratios = [1]*ncols
+            height_ratios = [1]*nrows + [cbar_pad_fraction]
+            total_cols = ncols
+            total_rows = nrows + 1
+            cbar_spec = ("bottom", slice(None))  # last row, all columns
+    else:
+        width_ratios = [1]*ncols
+        height_ratios = [1]*nrows
+        total_cols = ncols
+        total_rows = nrows
+        cbar_spec = None
+
+    # Figure & gridspec
+    fig = plt.figure(figsize=figsize, dpi=dpi, constrained_layout=constrained_layout)
+    gs = fig.add_gridspec(
+        total_rows, total_cols,
+        width_ratios=width_ratios,
+        height_ratios=height_ratios,
+        wspace=grid_wspace, hspace=grid_hspace
+    )
+
+    # Create axes for panels
+    axes = []
+    for idx in range(n_cases):
+        r = idx // ncols
+        c = idx % ncols
+        ax = fig.add_subplot(gs[r, c])
+        axes.append(ax)
+    axes = np.array(axes, dtype=object)
+
+    # Color normalization
+    if normalize in ("row", "col"):
+        norm = mpl.colors.Normalize(vmin=0.0 if vmin is None else vmin,
+                                    vmax=1.0 if vmax is None else vmax)
+    else:
+        # compute shared max count if needed
+        max_count = 0
+        for nm in case_labels:
+            y_true = np.asarray(dict_cases[nm]["y_true"]).astype(int)
+            y_pred = np.argmax(dict_cases[nm]["y_pred"], axis=1).astype(int)
+            cm_counts = np.zeros((C, C), dtype=int)
+            valid = (y_true >= 0) & (y_true < C)
+            for t, p in zip(y_true[valid], y_pred[valid]):
+                if 0 <= t < C and 0 <= p < C:
+                    cm_counts[t, p] += 1
+            max_count = max(max_count, int(cm_counts.max()) if cm_counts.size else 0)
+        norm = mpl.colors.Normalize(vmin=0.0 if vmin is None else vmin,
+                                    vmax=float(max_count) if vmax is None else vmax)
+
+    cmap_obj = plt.get_cmap(cmap)
+
+    # Shared limits / ticks
+    xlim = (-0.5, C - 0.5)
+    ylim = (C - 0.5, -0.5)             # origin='upper' feel
+    ticks = np.arange(C)
+
+    # Shared colorbar mappable
+    mappable_for_cbar = mpl.cm.ScalarMappable(norm=norm, cmap=cmap_obj)
+    mappable_for_cbar.set_array([])
+
+    # Draw each panel
+    for idx, nm in enumerate(case_labels):
+        ax = axes[idx]
+        payload = dict_cases[nm]
+        y_true = np.asarray(payload["y_true"]).astype(int)
+        y_pred = np.argmax(payload["y_pred"], axis=1).astype(int)
+
+        # Confusion matrix (counts)
+        cm_counts = np.zeros((C, C), dtype=int)
+        valid = (y_true >= 0) & (y_true < C)
+        for t, p in zip(y_true[valid], y_pred[valid]):
+            if 0 <= t < C and 0 <= p < C:
+                cm_counts[t, p] += 1
+
+        # Normalized for display
+        if normalize == "row":
+            denom = cm_counts.sum(axis=1, keepdims=True)
+            cm_display = np.divide(cm_counts, denom, where=(denom != 0))
+        elif normalize == "col":
+            denom = cm_counts.sum(axis=0, keepdims=True)
+            cm_display = np.divide(cm_counts, denom, where=(denom != 0))
+        else:
+            cm_display = cm_counts.astype(float)
+
+        # Heatmap
+        im = ax.imshow(cm_display, interpolation='nearest', cmap=cmap_obj, norm=norm, origin='upper')
+
+        # Axes styling
+        ax.set_xlim(xlim); ax.set_ylim(ylim)
+        ax.set_xticks(ticks); ax.set_yticks(ticks)
+        ax.set_xticklabels(class_names, fontsize=fs_ticks)
+        ax.set_yticklabels(class_names, fontsize=fs_ticks)
+        ax.set_aspect('equal', adjustable='box')
+
+        # Panel title
+        if panel_title_inside:
+            bbox = dict(boxstyle="round,pad=0.3", facecolor=panel_title_bbox_fc,
+                        alpha=panel_title_bbox_alpha, edgecolor="none") if panel_title_bbox else None
+            ax.text(0.01, 0.98, nm, transform=ax.transAxes, ha="left", va="top",
+                    fontsize=fs_title, color=panel_title_color, bbox=bbox)
+        else:
+            ax.set_title(nm, fontsize=fs_title, pad=20)
+
+        # Per-class diag metrics: TPR/PPV/F1
+        if annotate_diagonal or annotate_offdiag:
+            precision = np.zeros(C, dtype=float)
+            recall    = np.zeros(C, dtype=float)
+            f1        = np.zeros(C, dtype=float)
+            for i in range(C):
+                tp = cm_counts[i, i]
+                fp = cm_counts[:, i].sum() - tp
+                fn = cm_counts[i, :].sum() - tp
+                precision[i] = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                recall[i]    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                f1[i]        = (2 * precision[i] * recall[i] / (precision[i] + recall[i])
+                                if (precision[i] + recall[i]) > 0 else 0.0)
+
+        # Cell annotations
+        pct_fmt = f"{{:.{percent_decimals}f}}%"
+        for i in range(C):
+            for j in range(C):
+                val = cm_display[i, j]
+                # choose text color based on normalized value (map to [0,1] for threshold)
+                # If normalize == 'none', map counts to [0,1] using norm:
+                vis_level = float((val - norm.vmin) / (norm.vmax - norm.vmin + 1e-12))
+                text_color = "white" if vis_level > threshold_color else "black"
+
+                if i == j and annotate_diagonal:
+                    tp = cm_counts[i, i]
+                    text = (f"{tp}\n"
+                            f"TPR:{(recall[i]*100):.{percent_decimals}f}%"
+                            f"\nPPV:{(precision[i]*100):.{percent_decimals}f}%"
+                            f"\nF1:{f1[i]:.2f}")
+                    ax.text(j, i, text, ha="center", va="center",
+                            color=text_color, fontsize=fs_cell_diag, fontweight='bold', linespacing=1.2)
+                elif i != j and annotate_offdiag:
+                    count = cm_counts[i, j]
+                    if normalize == "row":
+                        denom = cm_counts[i, :].sum()
+                        percent = (count / denom * 100) if denom > 0 else 0.0
+                    elif normalize == "col":
+                        denom = cm_counts[:, j].sum()
+                        percent = (count / denom * 100) if denom > 0 else 0.0
+                    else:
+                        # Still show row-based percent for interpretability
+                        denom = cm_counts[i, :].sum()
+                        percent = (count / denom * 100) if denom > 0 else 0.0
+                    text = f"{count}\n{pct_fmt.format(percent)}"
+                    ax.text(j, i, text, ha="center", va="center",
+                            color=text_color, fontsize=fs_cell, linespacing=1.2)
+
+        # Outer labels only
+        if show_outer_labels:
+            r, c = divmod(idx, ncols)
+            if c == 0:
+                ax.set_ylabel("True Label", fontsize=fs_label, labelpad=6)
+            else:
+                ax.set_ylabel("")
+                for lab in ax.get_yticklabels():
+                    lab.set_visible(False)
+            if r == (nrows - 1):
+                ax.set_xlabel("Predicted Label", fontsize=fs_label, labelpad=6)
+                for lab in ax.get_xticklabels():
+                    lab.set_rotation(tick_rotation)
+                    lab.set_ha("right")
+                    lab.set_rotation_mode("anchor")
+            else:
+                ax.set_xlabel("")
+                for lab in ax.get_xticklabels():
+                    lab.set_visible(False)
+
+    # Colorbar axis
+    if add_colorbar:
+        if cbar_spec[0] == "right":
+            cax = fig.add_subplot(gs[:, -1])
+        else:
+            cax = fig.add_subplot(gs[-1, :])
+
+        cbar = fig.colorbar(mappable_for_cbar, cax=cax, orientation=cbar_orientation)
+        if cbar_orientation == "vertical":
+            cbar.set_label(cbar_label, fontsize=fs_cbar_label)
+        else:
+            cbar.set_label(cbar_label, fontsize=fs_cbar_label)
+        cbar.ax.tick_params(labelsize=fs_cbar_ticks)
+        # Pick sensible ticks if 'none' normalization
+        if normalize in ("row", "col"):
+            if cbar_ticks is not None:
+                cbar.set_ticks(cbar_ticks)
+        else:
+            # counts scale: let Matplotlib choose, unless provided
+            if cbar_ticks is not None:
+                cbar.set_ticks(cbar_ticks)
+
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+        fig.savefig(save_path, bbox_inches="tight")
+
+    return fig, axes
 
 def multiclass_brier_score(y_true, y_prob, n_classes=None):
     if n_classes is None:
@@ -1155,171 +991,49 @@ def multiclass_brier_score(y_true, y_prob, n_classes=None):
     y_true_one_hot = np.eye(n_classes)[y_true]
     return np.mean(np.sum((y_prob - y_true_one_hot) ** 2, axis=1))
 
-def compare_sets_performance(
-    yy_true_1, yy_pred_P_1,
-    yy_true_2, yy_pred_P_2,
-    class_names=None,
-    y_min_Delta_F1=-0.24, y_max_Delta_F1=0.24,
-    name_1="Set 1", name_2="Set 2",
-    color='royalblue',
-    title_fontsize=22,
-    produce_F1_plot=False,
-    f1_save_path=None,
-):
-    """
-    Compare two sets' performance and plot ΔF1 per class.
-
-    Parameters
-    ----------
-    ...
-    f1_save_path : str or None
-        If provided, saves the ΔF1 figure as a PDF. Can be a filename ending in .pdf
-        or a directory path (in which case a default filename is used).
-    """
-    import os
-
-    yy_pred_1 = np.argmax(yy_pred_P_1, axis=1)
-    yy_pred_2 = np.argmax(yy_pred_P_2, axis=1)
-
-    # Compute per-class recall (for metrics) and per-class F1 (for plot)
-    tpr_1 = recall_score(yy_true_1, yy_pred_1, average=None, zero_division=0)
-    tpr_2 = recall_score(yy_true_2, yy_pred_2, average=None, zero_division=0)
-    f1_1 = f1_score(yy_true_1, yy_pred_1, average=None, zero_division=0)
-    f1_2 = f1_score(yy_true_2, yy_pred_2, average=None, zero_division=0)
-
-    is_multiclass = yy_pred_P_1.ndim == 2 and yy_pred_P_1.shape[1] > 2
-
-    metrics = {
-        "Accuracy": (accuracy_score(yy_true_1, yy_pred_1), accuracy_score(yy_true_2, yy_pred_2), True),
-        "Macro F1": (np.mean(f1_1), np.mean(f1_2), True),
-        "Macro TPR": (np.mean(tpr_1), np.mean(tpr_2), True),
-        "Macro Precision": (
-            precision_score(yy_true_1, yy_pred_1, average='macro', zero_division=0),
-            precision_score(yy_true_2, yy_pred_2, average='macro', zero_division=0),
-            True
-        ),
-        "Macro AUROC": (
-            roc_auc_score(
-                yy_true_1,
-                yy_pred_P_1 if is_multiclass else yy_pred_P_1[:, 1],
-                average='macro' if is_multiclass else None,
-                multi_class='ovo' if is_multiclass else 'raise'
-            ) if len(np.unique(yy_true_1)) > 1 else np.nan,
-            roc_auc_score(
-                yy_true_2,
-                yy_pred_P_2 if is_multiclass else yy_pred_P_2[:, 1],
-                average='macro' if is_multiclass else None,
-                multi_class='ovo' if is_multiclass else 'raise'
-            ) if len(np.unique(yy_true_2)) > 1 else np.nan,
-            True
-        ),
-        "ECE": (compute_ece(yy_true_1, yy_pred_P_1), compute_ece(yy_true_2, yy_pred_P_2), False),
-        "Brier Score": (
-            multiclass_brier_score(yy_true_1, yy_pred_P_1),
-            multiclass_brier_score(yy_true_2, yy_pred_P_2),
-            False
-        )
-    }
-
-    print(f"\n=== {name_1} vs {name_2} Metrics ===")
-    header = f"{'Metric':<30}{name_1:>12}{name_2:>12}{f'Δ ({name_2} - {name_1})':>18}"
-    print(header)
-    print("-" * len(header))
-    for metric, (v1, v2, higher_is_better) in metrics.items():
-        delta = v2 - v1
-        delta_str = f"{delta:18.4f}"
-        if (higher_is_better and delta > 0) or (not higher_is_better and delta < 0):
-            delta_str = f"\033[92m{delta_str}\033[0m"  # green
-        elif delta != 0:
-            delta_str = f"\033[91m{delta_str}\033[0m"  # red
-        print(f"{metric:<30}{v1:12.4f}{v2:12.4f}{delta_str}")
-
-    if class_names is None:
-        class_names = [f"Class {i}" for i in range(len(f1_1))]
-
-    if produce_F1_plot:
-        # ---- ΔF1 bar plot ----
-        fig = plt.figure(figsize=(10, 5))
-        ax = fig.add_subplot(111)
-        ax.bar(class_names, f1_2 - f1_1, color=color)
-        ax.axhline(0, color='gray', linestyle='--', linewidth=1)
-        ax.set_ylabel("Δ F1-score")
-        ax.set_title(f"{name_2} - {name_1}", fontsize=title_fontsize)
-        plt.xticks(rotation=15, ha='right')
-        ax.set_ylim(y_min_Delta_F1, y_max_Delta_F1)
-        fig.tight_layout()
-
-        # --- Optional save to PDF ---
-        if f1_save_path is not None:
-            # If no .pdf suffix, or looks like a directory, build a filename
-            target_path = f1_save_path
-            base, ext = os.path.splitext(target_path)
-            if ext.lower() != ".pdf":
-                # treat as directory or base without .pdf
-                # if it's a directory (existing or intended), ensure it exists
-                if (ext == "") and (not os.path.basename(base)):  # path ends with slash-like
-                    os.makedirs(base, exist_ok=True)
-                    filename = f"Delta_F1_{name_2.replace(' ', '_')}_minus_{name_1.replace(' ', '_')}.pdf"
-                    target_path = os.path.join(base, filename)
-                else:
-                    # add .pdf to whatever they passed
-                    os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
-                    target_path = base + ".pdf"
-            else:
-                os.makedirs(os.path.dirname(base) or ".", exist_ok=True)
-
-            fig.savefig(target_path, format="pdf", bbox_inches="tight")
-
-        plt.show()
-
-    return metrics, f1_1, f1_2
-
-
-import os
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from matplotlib import ticker as mticker
-from math import ceil
-from sklearn.metrics import (
-    accuracy_score, f1_score, recall_score, precision_score, roc_auc_score
-)
-
 def compare_models_performance(
     *,
     dict_cases,                         # {case_name: {"y_true": (N,), "y_pred": (N,C), "plot_kwargs": {...}}}
     class_names=None,                   # list[str] in y_pred column order; if None, inferred from labels
-    title="Global Metrics Comparison",
-    figsize=(14, 6),
+    title=None,
+    figsize=(5, 24),
     palette=None,                       # optional list of colors for cases (fallback to tab10)
     save_path=None,                     # save figure (suffix decides format)
     include_metrics=("Accuracy", "Macro F1", "Macro TPR", "Macro Precision", "Macro AUROC", "ECE", "Brier Score"),
-    # Layout (now typically a single row)
-    nrows=1,                            # <- you'll use 1; columns auto-computed
-    subplot_hspace=0.35,
+    # Layout (can be multi-row; x-axis shared across rows)
+    nrows=7,
+    subplot_hspace=-1.166,
     subplot_wspace=0.25,
     # Per-subpanel y-ranges
     y_ranges=None,                      # dict: {metric_name: (ymin, ymax)}; others auto-scaled
     y_margin_frac=0.07,
     # Bars & annotations
-    bar_alpha=0.9,
+    bar_alpha=1.0,
     bar_edgecolor="black",
-    bar_width=0.6,                      # width for one bar per case in each subplot
+    bar_width=0.7,                      # width for one bar per case in each subplot
     annotate_values=True,
-    value_label_fontsize=9,
+    value_label_fontsize=12,
     # Axes cosmetics
     ylabel_text="Score",                # only shown on the FIRST subplot
     left_margin=0.12,
     # Tick formatting
-    ytick_step=0.05,
+    ytick_step=None,                    # used if ytick_count is None
     ytick_format="{x:.2f}",
     two_line_xticklabels=True,          # break each case label into two lines
+    # NEW: y-ticks by count (overrides ytick_step when provided)
+    ytick_count=3,                   # e.g., 5 -> exactly 5 ticks via LinearLocator
+    # Best-line preferences
+    metric_best_high_low={"ECE": "low",  "Brier Score": "low"}, # others default to "high"
+    best_line_kwargs={"ls": "--", "lw": 1.8, "alpha": 0.9}, # "color" intentionally omitted; it’s set to the winner’s bar color
+    # Title-as-text-in-axes options
+    metric_title_fontsize=22,
+    metric_title_bbox={"facecolor": "white", "alpha": 0.9, "boxstyle": "round,pad=0.2", "edgecolor": "k"}
 ):
     """
     Multi-subpanel comparison of global metrics. One subplot per metric, each with its own y-axis.
-    - Single row layout supported (set nrows=1).
-    - No legend: x-tick labels show the case names (two-line labels to save space).
-    - Y-axis label "Score" only on the FIRST subplot.
+    - Titles are drawn as top-left in-axes text (no Axes.set_title).
+    - Optional ytick_count to control number of y ticks (else step/format used).
+    - Best-performing case marked with a horizontal line in that case's bar color.
     """
     if not dict_cases:
         raise ValueError("dict_cases must contain at least one case.")
@@ -1345,46 +1059,14 @@ def compare_models_performance(
         oh[np.arange(y.size), y.astype(int)] = 1.0
         return oh
 
-    def _multiclass_brier_score(y_true, y_pred):
-        y_true = np.asarray(y_true)
-        y_pred = np.asarray(y_pred)
-        y_oh = _one_hot(y_true, y_pred.shape[1])
-        return float(np.mean(np.sum((y_pred - y_oh) ** 2, axis=1)))
-
-    def _compute_ece(y_true, y_pred, n_bins=15, strategy="uniform"):
-        y_true = np.asarray(y_true).astype(int)
-        y_pred = np.asarray(y_pred)
-        conf = np.max(y_pred, axis=1)
-        pred = np.argmax(y_pred, axis=1)
-        correct = (pred == y_true).astype(float)
-        if strategy == "uniform":
-            bins = np.linspace(0.0, 1.0, n_bins + 1)
-        else:
-            bins = np.quantile(conf, np.linspace(0.0, 1.0, n_bins + 1))
-            bins[0], bins[-1] = 0.0, 1.0
-        bin_ids = np.digitize(conf, bins) - 1
-        ece = 0.0
-        N = len(conf)
-        for b in range(n_bins):
-            mask = bin_ids == b
-            if not np.any(mask):
-                continue
-            acc_b = float(np.mean(correct[mask]))
-            conf_b = float(np.mean(conf[mask]))
-            ece += (np.sum(mask) / N) * abs(acc_b - conf_b)
-        return float(ece)
-
-    # Use external helpers if defined
-    try:
-        compute_ece  # noqa: F821
-        _ece_func = compute_ece
-    except NameError:
-        _ece_func = _compute_ece
-    try:
-        multiclass_brier_score  # noqa: F821
-        _brier_func = multiclass_brier_score
-    except NameError:
-        _brier_func = _multiclass_brier_score
+    # Helper: preference ("high" or "low") for a metric
+    def _pref(metric_name: str) -> str:
+        if isinstance(metric_best_high_low, dict) and metric_name in metric_best_high_low:
+            val = metric_best_high_low[metric_name].lower()
+            return "low" if val.startswith("low") else "high"
+        # sensible defaults
+        low_is_better = {"ECE", "Brier Score"}
+        return "low" if metric_name in low_is_better else "high"
 
     # compute metrics
     per_case_vals = {metric: [] for metric in include_metrics}
@@ -1415,30 +1097,25 @@ def compare_models_performance(
             auroc = np.nan
 
         try:
-            ece = _ece_func(y_true, y_pred)
+            ece = compute_ece(y_true, y_pred)
         except Exception:
             ece = np.nan
         try:
-            brier = _brier_func(y_true, y_pred)
+            brier = multiclass_brier_score(y_true, y_pred)
         except Exception:
             brier = np.nan
 
         vals_map = {
-            "Accuracy": acc,
-            "Macro F1": f1_macro,
-            "Macro TPR": tpr_macro,
-            "Macro Precision": prec_macro,
-            "Macro AUROC": auroc,
-            "ECE": ece,
-            "Brier Score": brier,
+            "Accuracy": acc, "Macro F1": f1_macro, "Macro TPR": tpr_macro, "Macro Precision": prec_macro,
+            "Macro AUROC": auroc, "ECE": ece, "Brier Score": brier,
         }
         for metric in include_metrics:
             per_case_vals[metric].append(vals_map[metric])
 
-    # figure & subpanels
+    # figure & subpanels (share x across rows)
     M = len(include_metrics)
     ncols = ceil(M / nrows)
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize, sharex=True)
     if isinstance(axes, np.ndarray):
         axes = np.array(axes).reshape(nrows, ncols)
     else:
@@ -1460,7 +1137,6 @@ def compare_models_performance(
         spaces = [i for i, ch in enumerate(s) if ch == " "]
         if not spaces:
             return s
-        # pick the space closest to the center
         center = len(s) / 2.0
         split_idx = min(spaces, key=lambda i: abs(i - center))
         return s[:split_idx] + "\n" + s[split_idx+1:]
@@ -1511,26 +1187,56 @@ def compare_models_performance(
                     ha="center", va="bottom", fontsize=value_label_fontsize
                 )
 
-        # cosmetics per subplot
-        ax.set_title(metric)
+        # y-limits
         ax.set_ylim(ymin, ymax)
-        if idx_metric == 0:
-            ax.set_ylabel(ylabel_text)    # only first subplot shows y-label
-        else:
-            ax.set_ylabel(None)
 
-        # x ticks: case names in two lines
-        dx = -0.2  # shift to the right (use negative to go left)
+        # y-label only on first subplot
+        ax.set_ylabel(ylabel_text, fontsize=22)
+
+        # x ticks: case names in two lines (only bottom row shows labels)
+        dx = -0.2
         ax.set_xticks(x + dx)
-        ax.set_xticklabels(xtick_labels, rotation=40, fontsize=12)
-        ax.set_xlim(-0.5, n_cases - 0.5)
+        if r == nrows - 1:
+            ax.set_xticklabels(xtick_labels, rotation=40, fontsize=16)
+        else:
+            ax.set_xticklabels([])
+            ax.tick_params(axis='x', which='both', length=0)
 
-        # enforce y ticks at multiples of 0.05
-        ax.yaxis.set_major_locator(mticker.MultipleLocator(ytick_step))
-        ax.yaxis.set_major_formatter(mticker.StrMethodFormatter(ytick_format))
+        # y-ticks: either fixed count or step-based
+        if ytick_count is not None:
+            ax.yaxis.set_major_locator(mticker.LinearLocator(ytick_count))
+            ax.yaxis.set_major_formatter(mticker.StrMethodFormatter(ytick_format))
+        else:
+            ax.yaxis.set_major_locator(mticker.MultipleLocator(ytick_step))
+            ax.yaxis.set_major_formatter(mticker.StrMethodFormatter(ytick_format))
 
-        # remove gridlines
+        # no grid
         ax.grid(False)
+
+        # --- TITLE AS IN-AXES TEXT (top-left) ---
+        bbox = metric_title_bbox if metric_title_bbox is not None else None
+        ax.text(
+            0.07, 0.93, metric,
+            transform=ax.transAxes, ha="left", va="top",
+            fontsize=metric_title_fontsize, bbox=bbox
+        )
+
+        # --- best horizontal line (colored by winner) ---
+        vals_arr = np.array([
+            v if (isinstance(v, (int, float)) and np.isfinite(v)) else np.nan
+            for v in vals
+        ], dtype=float)
+
+        if not np.all(np.isnan(vals_arr)):
+            best_idx = int(np.nanargmin(vals_arr)) if _pref(metric) == "low" else int(np.nanargmax(vals_arr))
+            best_val = float(vals_arr[best_idx])
+
+            line_kwargs = dict(color=case_colors[best_idx], ls="--", lw=1.8, alpha=0.9)
+            if best_line_kwargs:
+                tmp = line_kwargs.copy()
+                tmp.update({k: v for k, v in best_line_kwargs.items() if k != "color"})
+                line_kwargs = tmp
+            ax.axhline(best_val, **line_kwargs)
 
     # hide any unused axes
     for idx_extra in range(M, nrows * ncols):
@@ -1538,53 +1244,67 @@ def compare_models_performance(
         c = idx_extra % ncols
         axes[r, c].axis("off")
 
-    # figure title (no legend)
+    # figure title
     if title:
         fig.suptitle(title, fontsize=14, y=0.995)
 
-    # reserve left margin so first y-label isn't clipped
+    # margins & spacing
     fig.subplots_adjust(left=left_margin, hspace=subplot_hspace, wspace=subplot_wspace)
 
     if save_path is not None:
+        import os
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
         fig.savefig(save_path, bbox_inches="tight")
 
     return fig, axes
 
-
 def compare_models_performance_per_class(
     *,
     dict_cases,                         # {case_name: {"y_true": (N,), "y_pred": (N,C), "plot_kwargs": {...}}}
     class_names=None,                   # list[str] in y_pred column order; if None, inferred from labels
-    title="Per-Class Metrics across Cases",
-    figsize=(16, 6),
+    xtick_labels_fontsize=24,
+    title=None,
+    figsize=(9, 25),
     palette=None,                       # optional list of colors for cases (fallback to tab10)
     save_path=None,                     # save figure (suffix decides format)
     include_metrics=("Accuracy", "F1", "TPR", "Precision", "AUROC", "ECE", "Brier"),
-    # Layout: you'll likely use a single row
-    nrows=1,
-    subplot_hspace=0.35,
+    # Layout
+    nrows=7,
+    subplot_hspace=0.1,
     subplot_wspace=0.25,
     # Per-subpanel y-ranges (by metric)
-    y_ranges=None,                      # dict: {metric_name: (ymin, ymax)}; others auto-scaled
+    y_ranges=None,                      
     y_margin_frac=0.07,
     # Bars & annotations
-    bar_alpha=0.9,
+    bar_alpha=1.0,
     bar_edgecolor="black",
-    group_width=0.8,                    # total width occupied by all cases at one class tick
+    group_width=0.9,                    
     annotate_values=True,
-    value_label_fontsize=8,
+    value_label_fontsize=9,
     # Axes cosmetics
-    ylabel_text="Score",                # only shown on the FIRST subplot
+    ylabel_text="Score",                
     left_margin=0.10,
     # Tick formatting
-    ytick_step=0.05,
+    ytick_step=None,
     ytick_format="{x:.2f}",
-    two_line_class_xticklabels=False,   # break long class names into two lines
+    ytick_count=3,                   
+    two_line_class_xticklabels=False,   
+    # Best-line options (per class tick
+    metric_best_high_low={"Accuracy": "high", "F1": "high", "TPR": "high", "Precision": "high", "AUROC": "high", "ECE": "low", "Brier": "low"},          
+    best_line_kwargs={"ls": "--", "lw": 2.0, "alpha": 0.9},              
+    # Metric title inside axes
+    metric_title_fontsize=22,           
+    metric_title_bbox={"facecolor": "white", "alpha": 0.9, "boxstyle": "round,pad=0.2", "edgecolor": "k"},             
 ):
     """
     Plot a multi-subpanel comparison of per-class metrics across an arbitrary number of cases.
     One subplot per metric; within each subplot, x-axis = classes, and bars = cases.
+
+    Improvements:
+    - Shared x-axis across rows (internal rows hide x labels).
+    - Titles as in-axes text (top-left), customizable.
+    - Optional fixed number of y-ticks (ytick_count) or step-based ticks (ytick_step).
+    - Per-class best indicator lines colored by the winning case’s bar color.
 
     Notes:
     - "Accuracy" per class is taken as within-class accuracy, i.e., TPR/recall for that class.
@@ -1592,8 +1312,22 @@ def compare_models_performance_per_class(
     - ECE per class is computed for the binary problem (class vs rest) using the predicted probability of that class.
     - Brier per class is the mean squared error of the predicted probability for that class vs. the one-hot target for that class.
     """
+
     if not dict_cases:
         raise ValueError("dict_cases must contain at least one case.")
+
+    # ---- Defaults for best-line logic ----
+    if metric_best_high_low is None:
+        metric_best_high_low = {}
+    # sensible defaults: low is better for ECE/Brier; high for others
+    def _is_high_better(metric_name: str) -> bool:
+        m = metric_name.lower()
+        if m in ("ece", "brier", "brier score"):
+            return metric_best_high_low.get(metric_name, "low") == "high"
+        return metric_best_high_low.get(metric_name, "high") == "high"
+
+    if best_line_kwargs is None:
+        best_line_kwargs = {"ls": "--", "lw": 1.8, "alpha": 0.9}
 
     case_names = list(dict_cases.keys())
     n_cases = len(case_names)
@@ -1615,11 +1349,9 @@ def compare_models_performance_per_class(
 
     # ---- Helpers for per-class ECE & Brier (binary, class-vs-rest) ----
     def _brier_per_class(y_true, p):
-        # y_true: (N,) binary {0,1}; p: (N,) predicted prob for class=1
         return float(np.mean((p - y_true.astype(float)) ** 2))
 
     def _ece_binary(y_true, p, n_bins=15, strategy="uniform"):
-        # y_true: (N,) binary {0,1}; p: (N,) predicted prob for class=1
         y_true = np.asarray(y_true).astype(int)
         p = np.asarray(p).astype(float)
         if p.size == 0:
@@ -1642,8 +1374,6 @@ def compare_models_performance_per_class(
         return float(ece)
 
     # ---- Compute per-class metrics for each case ----
-    # Structure: per_metric_vals[metric] -> list length C of arrays (len n_cases)
-    # We'll organize as: per_metric_vals[metric] = np.array shape (C, n_cases)
     per_metric_vals = {m: np.full((C, n_cases), np.nan, dtype=float) for m in include_metrics}
 
     for j, (case, payload) in enumerate(dict_cases.items()):
@@ -1651,15 +1381,12 @@ def compare_models_performance_per_class(
         y_pred = np.asarray(payload["y_pred"])
         y_hat = np.argmax(y_pred, axis=1)
 
-        # Per-class standard metrics via sklearn
-        f1_vec = f1_score(y_true, y_hat, average=None, zero_division=0)
+        f1_vec  = f1_score(y_true, y_hat, average=None, zero_division=0)
         rec_vec = recall_score(y_true, y_hat, average=None, zero_division=0)
-        prec_vec = precision_score(y_true, y_hat, average=None, zero_division=0)
+        prec_vec= precision_score(y_true, y_hat, average=None, zero_division=0)
 
-        # AUROC, ECE, Brier per class (one-vs-rest)
-        # Also define class-wise "Accuracy" as TPR/recall (within-class correctness)
         for i, cls in enumerate(classes):
-            # accuracy (within-class) = recall for that class
+            # Accuracy per class = recall for that class
             if "Accuracy" in per_metric_vals:
                 per_metric_vals["Accuracy"][i, j] = rec_vec[i]
             if "F1" in per_metric_vals:
@@ -1669,11 +1396,9 @@ def compare_models_performance_per_class(
             if "Precision" in per_metric_vals:
                 per_metric_vals["Precision"][i, j] = prec_vec[i]
 
-            # one-vs-rest ground truth and prob
             y_bin = (y_true == cls).astype(int)
             p_cls = y_pred[:, i]
 
-            # AUROC (only if both classes present)
             if "AUROC" in per_metric_vals:
                 if len(np.unique(y_bin)) > 1:
                     try:
@@ -1682,8 +1407,6 @@ def compare_models_performance_per_class(
                         per_metric_vals["AUROC"][i, j] = np.nan
                 else:
                     per_metric_vals["AUROC"][i, j] = np.nan
-
-            # ECE and Brier for this class probability
             if "ECE" in per_metric_vals:
                 try:
                     per_metric_vals["ECE"][i, j] = _ece_binary(y_bin, p_cls)
@@ -1695,10 +1418,10 @@ def compare_models_performance_per_class(
                 except Exception:
                     per_metric_vals["Brier"][i, j] = np.nan
 
-    # ---- Figure & subpanels ----
+    # ---- Figure & subpanels (shared x across rows) ----
     M = len(include_metrics)
     ncols = ceil(M / nrows)
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize, sharex=True)
     if isinstance(axes, np.ndarray):
         axes = np.array(axes).reshape(nrows, ncols)
     else:
@@ -1716,26 +1439,25 @@ def compare_models_performance_per_class(
     # x-axis: classes; grouped bars by case
     x = np.arange(C)
     width = min(group_width / max(n_cases, 1), 0.9 / max(n_cases, 1))
-    # centers distributed across group_width
     offsets = (np.arange(n_cases) - (n_cases - 1) / 2.0) * width
 
-    # helper to split class labels in two lines
+    # helper: split class labels in two lines
     def _two_line(name: str) -> str:
         s = str(name)
         if not two_line_class_xticklabels:
             return s
-        spaces = [i for i, ch in enumerate(s) if ch == " " or ch == "_"]
-        if not spaces:
-            # try hyphen as split
-            hyph = [i for i, ch in enumerate(s) if ch == "-"]
-            if not hyph:
-                return s
-            spaces = hyph
+        splits = [i for i, ch in enumerate(s) if ch in (" ", "_", "-")]
+        if not splits:
+            return s
         center = len(s) / 2.0
-        split_idx = min(spaces, key=lambda i: abs(i - center))
+        split_idx = min(splits, key=lambda i: abs(i - center))
         return s[:split_idx] + "\n" + s[split_idx+1:]
 
     xtick_labels = [_two_line(nm) for nm in class_names_used]
+
+    # default metric title bbox
+    if metric_title_bbox is None:
+        metric_title_bbox = dict(facecolor="white", alpha=0.85, boxstyle="round,pad=0.2", edgecolor="none")
 
     # Draw each metric subplot
     for m_idx, metric in enumerate(include_metrics):
@@ -1760,7 +1482,7 @@ def compare_models_performance_per_class(
             else:
                 ymin, ymax = 0.0, 1.0
 
-        # grouped bars: for each class index i, draw n_cases bars
+        # grouped bars
         for j in range(n_cases):
             y_j = [vals[i, j] if np.isfinite(vals[i, j]) else 0.0 for i in range(C)]
             ax.bar(
@@ -1778,24 +1500,49 @@ def compare_models_performance_per_class(
                         ha="center", va="bottom", fontsize=value_label_fontsize
                     )
 
-        # cosmetics per subplot
-        ax.set_title(metric)
-        ax.set_ylim(ymin, ymax)
-        if m_idx == 0:
-            ax.set_ylabel(ylabel_text)   # only first subplot
-        else:
-            ax.set_ylabel(None)
+        # per-class best lines (short segments centered at each class tick)
+        high_better = _is_high_better(metric)
+        for i_cls in range(C):
+            col = vals[i_cls, :]
+            if not np.any(np.isfinite(col)):
+                continue
+            if high_better:
+                j_best = int(np.nanargmax(col))
+            else:
+                j_best = int(np.nanargmin(col))
+            y_best = float(col[j_best])
+            # draw a short horizontal segment spanning the group at this class tick
+            x_left  = x[i_cls] - group_width / 2.0
+            x_right = x[i_cls] + group_width / 2.0
+            line_kwargs = dict(best_line_kwargs)
+            line_kwargs["color"] = case_colors[j_best]  # color of the winning case
+            ax.hlines(y_best, x_left, x_right, **line_kwargs)
 
-        # x ticks: class names
+        # cosmetics per subplot
+        ax.set_ylim(ymin, ymax)
+        ax.set_ylabel(ylabel_text)
+
+        # x ticks: class names (set only once; sharex propagates)
         ax.set_xticks(x)
-        ax.set_xticklabels(xtick_labels, rotation=0, fontsize=16)
+        ax.set_xticklabels(xtick_labels, rotation=0, fontsize=xtick_labels_fontsize)
         ax.set_xlim(x[0] - group_width/2.0 - 0.2, x[-1] + group_width/2.0 + 0.2)
 
-        # enforce y ticks at multiples of 0.05 and consistent format
-        ax.yaxis.set_major_locator(mticker.MultipleLocator(ytick_step))
+        # y ticks: either fixed count or step-based
+        if ytick_count is not None and ytick_count > 1:
+            ax.yaxis.set_major_locator(mticker.MaxNLocator(ytick_count))
+        else:
+            ax.yaxis.set_major_locator(mticker.MultipleLocator(ytick_step))
         ax.yaxis.set_major_formatter(mticker.StrMethodFormatter(ytick_format))
 
-        # remove gridlines and legend
+        # titles as in-axes text (top-left)
+        ax.text(
+            0.05, 0.90, str(metric),
+            transform=ax.transAxes,
+            ha="left", va="top",
+            fontsize=metric_title_fontsize,
+            bbox=metric_title_bbox
+        )
+
         ax.grid(False)
 
     # hide any unused axes
@@ -1803,6 +1550,11 @@ def compare_models_performance_per_class(
         r = idx_extra // ncols
         c = idx_extra % ncols
         axes[r, c].axis("off")
+
+    # hide shared x tick labels for all but bottom row
+    for r in range(nrows - 1):
+        for c in range(ncols):
+            axes[r, c].tick_params(axis="x", which="both", labelbottom=False)
 
     # figure title (no legend)
     if title:
@@ -1816,16 +1568,6 @@ def compare_models_performance_per_class(
         fig.savefig(save_path, bbox_inches="tight")
 
     return fig, axes
-
-
-
-
-def safe_interp(fpr, tpr, x_new):
-    fpr_unique, idx = np.unique(fpr, return_index=True)
-    tpr_unique = tpr[idx]
-    interpolator = interp1d(fpr_unique, tpr_unique, kind='linear', bounds_error=False, fill_value='extrapolate')
-    y_new = interpolator(x_new)
-    return np.nan_to_num(y_new, nan=0.0, posinf=0.0, neginf=0.0)
 
 def plot_latents_scatter(
     X_emb, y_labels,
@@ -2284,190 +2026,3 @@ def safe_compare(a, b, path="root"):
             logging.debug(f"❌ Value mismatch at {path}: {a} ≠ {b}")
             return False
         return True
-
-def evaluate_results_from_load_paths(
-    paths_load,
-    return_keys=['val_DESI_only', 'test_JPAS_matched'],
-    define_dataset_loaders_keys=['DESI_only', 'JPAS_matched'],
-    keys_yy=["SPECTYPE_int", "TARGETID", "DESI_FLUX_R"]
-):
-
-    # ─────────────────────────────────────────────────────────────
-    # Load and validate data config across all paths
-    # ─────────────────────────────────────────────────────────────
-    logging.info("🔍 Validating model configs...")
-    configs = []
-    for path in paths_load:
-        _, config = wrapper_tools.load_and_massage_config_file(
-            os.path.join(path, "config.yaml"), path
-        )
-        configs.append(config)
-
-    config_ref = configs[0]
-    for i, cfg in enumerate(configs[1:], 1):
-        logging.debug(f"🔍 Comparing config 0 and config {i}")
-        if not safe_compare(cfg['data'], config_ref['data']):
-            raise ValueError(f"🚫 Data config mismatch between model 0 and model {i}")
-
-    config_data = config_ref["data"]
-    keys_xx = config_data["features_labels_options"]["keys_xx"]
-
-    # Extract paths and options
-    path_save = config_ref['training']['path_save']
-
-    data_paths = config_data["data_paths"]
-    root_path = data_paths["root_path"]
-    load_JPAS_data = data_paths["load_JPAS_data"]
-    load_DESI_data = data_paths["load_DESI_data"]
-    random_seed_load = data_paths["random_seed_load"]
-
-    clean_opts = config_data["dict_clean_data_options"]
-    split_opts = config_data["dict_split_data_options"]
-
-    # ─────────────────────────────────────────────────────────────
-    # Load and preprocess shared data
-    # ─────────────────────────────────────────────────────────────
-    logging.info("\n\n1️⃣: Loading datasets from disk...")
-    DATA = loading_tools.load_dsets(root_path, load_JPAS_data, load_DESI_data, random_seed_load)
-
-    logging.info("\n\n2️⃣: Cleaning and masking data...")
-    DATA = cleaning_tools.clean_and_mask_data(DATA=DATA, **clean_opts)
-
-    logging.info("\n\n3️⃣: Crossmatching JPAS and DESI TARGETIDs...")
-    Dict_LoA = {"both": {}, "only": {}}
-    _, _, _, Dict_LoA["only"]["DESI"], Dict_LoA["only"]["JPAS"], Dict_LoA["both"]["DESI"], Dict_LoA["both"]["JPAS"] = \
-        crossmatch_tools.crossmatch_IDs_two_datasets(DATA["DESI"]["TARGETID"], DATA["JPAS"]["TARGETID"])
-
-    logging.info("\n\n4️⃣: Splitting data into train/val/test...")
-    Dict_LoA_split = {"both": {}, "only": {}}
-
-    # Always split 'both' JPAS and DESI (assumed always needed)
-    Dict_LoA_split["both"]["JPAS"] = process_dset_splits.split_LoA(
-        Dict_LoA["both"]["JPAS"],
-        split_opts["train_ratio_both"], split_opts["val_ratio_both"], split_opts["test_ratio_both"],
-        seed=split_opts["random_seed_split_both"]
-    )
-    Dict_LoA_split["both"]["DESI"] = process_dset_splits.split_LoA(
-        Dict_LoA["both"]["DESI"],
-        split_opts["train_ratio_both"], split_opts["val_ratio_both"], split_opts["test_ratio_both"],
-        seed=split_opts["random_seed_split_both"]
-    )
-    # Split 'only' DESI if available
-    if "DESI" in Dict_LoA["only"]:
-        Dict_LoA_split["only"]["DESI"] = process_dset_splits.split_LoA(
-            Dict_LoA["only"]["DESI"],
-            split_opts["train_ratio_only_DESI"], split_opts["val_ratio_only_DESI"], split_opts["test_ratio_only_DESI"],
-            seed=split_opts["random_seed_split_only_DESI"]
-        )
-    # Optionally split 'only' JPAS if available
-    if "JPAS" in Dict_LoA["only"]:
-        Dict_LoA_split["only"]["JPAS"] = process_dset_splits.split_LoA(
-            Dict_LoA["only"]["JPAS"],
-            split_opts.get("train_ratio_only_JPAS", 0.7),
-            split_opts.get("val_ratio_only_JPAS", 0.15),
-            split_opts.get("test_ratio_only_JPAS", 0.15),
-            seed=split_opts.get("random_seed_split_only_JPAS", 42)
-        )
-    
-    logging.info("\n\n5️⃣: Load and normalize data...")
-    xx_dict, yy_dict = {}, {}
-
-    for split in ["train", "val", "test"]:
-        xx_dict[split] = {}
-        yy_dict[split] = {}
-
-        for loader in define_dataset_loaders_keys:
-            assert isinstance(loader, str), f"❌ Loader key is not a string: {loader}"
-            source = "DESI" if "DESI" in loader else "JPAS"
-            split_type = "both" if "matched" in loader or "combined" in loader else "only"
-
-            if split_type not in Dict_LoA_split or source not in Dict_LoA_split[split_type]:
-                logging.warning(f"⚠️ Skipping loader '{loader}' because '{source}' not found in split type '{split_type}'")
-                continue
-
-            subset = Dict_LoA_split[split_type][source].get(split, [])
-            if not subset:
-                logging.warning(f"⚠️ No entries found for split '{split}' in loader '{loader}'")
-                continue
-
-            LoA, xx, yy = process_dset_splits.extract_data_using_LoA(subset, DATA[source], keys_xx, keys_yy)
-
-            xx_dict[split][str(loader)] = torch.tensor(xx, dtype=torch.float32)
-            yy_dict[split][str(loader)] = yy
-
-    # ─────────────────────────────────────────────────────────────
-    # Evaluate each model and collect results
-    # ─────────────────────────────────────────────────────────────
-    logging.info("\n\n Evaluate each model and collect results...")
-    out = {}
-    for model_idx, path in enumerate(paths_load):
-        _, model_encoder = save_load_tools.load_model_from_checkpoint(
-            os.path.join(path, "model_encoder.pt"), model_building_tools.create_mlp)
-        _, model_downstream = save_load_tools.load_model_from_checkpoint(
-            os.path.join(path, "model_downstream.pt"), model_building_tools.create_mlp)
-
-        out[model_idx] = {}
-        for key in return_keys:
-            split, loader = key.split("_", maxsplit=1)
-            xx_input = xx_dict[split][loader]
-
-            with torch.no_grad():
-                features = model_encoder(xx_input)
-                logits = model_downstream(features)
-                probs = torch.nn.functional.softmax(logits, dim=1).cpu().numpy()
-
-            out[model_idx][key] = {
-                "true": yy_dict[split][loader]["SPECTYPE_int"],
-                "prob": probs,
-                "label": np.argmax(probs, axis=1),
-                "features": features.cpu().numpy(),
-                "xx": xx_input.cpu().numpy(),
-                "TARGETID": yy_dict[split][loader]["TARGETID"],
-                "DESI_FLUX_R": yy_dict[split][loader]["DESI_FLUX_R"]
-            }
-
-    return out
-
-def add_magnitude_bins_to_results(
-    out_dict,
-    magnitude_key="DESI_FLUX_R",
-    mag_bin_edges=(17, 19, 21, 22, 22.5),
-    output_key="MAG_BIN_ID"
-):
-    """
-    Adds magnitude bin indices to each dataset entry in the out_dict.
-    The binning is done using the R-band magnitude computed from DESI_FLUX_R.
-
-    Parameters
-    ----------
-    out_dict : dict
-        Dictionary returned by evaluate_results_from_load_paths.
-    magnitude_key : str
-        Key inside each subdict to use for flux (to convert to magnitude).
-    mag_bin_edges : tuple or list
-        Magnitude bin edges (right-exclusive).
-    output_key : str
-        New key to store the bin index (-1 if not assigned).
-    """
-    import numpy as np
-
-    bin_edges = np.array(mag_bin_edges)
-
-    for model_idx in out_dict:
-        for key in out_dict[model_idx]:
-            flux = out_dict[model_idx][key][magnitude_key]
-            # Convert flux to magnitude
-            magnitude = np.full_like(flux, np.nan, dtype=np.float32)
-            valid = flux > 0
-            magnitude[valid] = 22.5 - 2.5 * np.log10(flux[valid])
-
-            # Compute bin indices
-            bin_indices = np.full_like(magnitude, -1, dtype=int)
-            for i in range(len(bin_edges) - 1):
-                in_bin = (magnitude >= bin_edges[i]) & (magnitude < bin_edges[i + 1])
-                bin_indices[in_bin] = i
-
-            # Store bin index in the result dictionary
-            out_dict[model_idx][key][output_key] = bin_indices
-
-    return out_dict

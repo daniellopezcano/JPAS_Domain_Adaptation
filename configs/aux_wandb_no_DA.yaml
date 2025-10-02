@@ -8,23 +8,10 @@ global:
 # Data Configuration
 # ════════════════════════════════════════════════════════════════════
 data:
-  # ── data_path ──
-  data_paths: default_global_setup
-
-  # ── clean_data_options ──
-  dict_clean_data_options: default_global_setup
-
-  # ── Train/val/test splits ──
-  dict_split_data_options: default_global_setup
-
-  # ── Input/output keys ──
-  features_labels_options:
-    define_dataset_loaders_keys: [DESI_only]
-    keys_xx: [OBS, MORPHTYPE_int]
-    keys_yy: [SPECTYPE_int]
-    normalize: true
-    normalization_source_key: DESI_only
-    key_survey_training: DESI_only
+  cleaning_config: default_global_setup
+  keys_xx: ["all_observations_normalized", "MORPHTYPE_int"]
+  keys_yy: ["SPECTYPE_int"]
+  key_survey_training: DESI_mocks_Raul
 
 # ════════════════════════════════════════════════════════════════════
 # Model Architecture
@@ -42,10 +29,11 @@ training:
   sampling_strategy: true_random
   freeze_downstream_model: false
   
-  NN_epochs: 2048
-  batch_size_val: null
+  NN_epochs: 2500
+  batch_size_val: 15597
 
   seed_mode: deterministic
+  seed : 137
 
   device: cuda
 
@@ -54,88 +42,102 @@ training:
 # ════════════════════════════════════════════════════════════════
 
 encoders:
-  # Three-layer encoder with light dropout
-  - hidden_layers: [256, 128, 64]
-    dropout_rates: [0.1, 0.1, 0.1]
 
-  # Narrow deep encoder, compressive
-  - hidden_layers: [128, 64, 32, 16]
-    dropout_rates: [0.0, 0.1, 0.2, 0.3]
+  - hidden_layers: [8]
+    dropout_rates: [0.2]
 
-  # Moderate width, 3-layer
-  - hidden_layers: [256, 128, 64]
-    dropout_rates: [0.1, 0.2, 0.2]
+  - hidden_layers: [8]
+    dropout_rates: [0.01]
 
-  # Uniform medium-depth encoder
-  - hidden_layers: [128, 128, 128]
-    dropout_rates: [0.1, 0.1, 0.1]
+  - hidden_layers: [512]
+    dropout_rates: [0.2]
 
-  # Deeper, consistent dropout, moderate width
-  - hidden_layers: [128, 64, 64, 32]
-    dropout_rates: [0.1, 0.1, 0.1, 0.1]
+  - hidden_layers: [512]
+    dropout_rates: [0.001]
 
-  # Same-width 4-layer encoder
-  - hidden_layers: [64, 64, 64, 64]
-    dropout_rates: [0.1, 0.1, 0.1, 0.1]
+  - hidden_layers: [16, 8]
+    dropout_rates: [0.2, 0.2]
 
-  # Compressing 5-layer encoder
-  - hidden_layers: [256, 128, 64, 32, 16]
-    dropout_rates: [0.2, 0.2, 0.2, 0.2, 0.2]
+  - hidden_layers: [16, 8]
+    dropout_rates: [0.001, 0.001]
 
-  # Middle-range capacity with alternating dropout
-  - hidden_layers: [512, 128, 32]
-    dropout_rates: [0.2, 0.1, 0.0]
-
-  # Shallow wide encoder with regularization
   - hidden_layers: [512, 128]
-    dropout_rates: [0.3, 0.3]
+    dropout_rates: [0.2, 0.2]
+
+  - hidden_layers: [512, 128]
+    dropout_rates: [0.001, 0.001]
+
+  - hidden_layers: [16, 8, 4]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [16, 8, 4]
+    dropout_rates: [0.001, 0.001, 0.001]
+
+  - hidden_layers: [512, 128, 64]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [512, 128, 64]
+    dropout_rates: [0.001, 0.001, 0.001]
 
 
 downstreams:
-  # Minimal head
-  - hidden_layers: [32]
-    dropout_rates: [0.0]
 
-  # Small 1-layer
-  - hidden_layers: [64]
-    dropout_rates: [0.1]
+  - hidden_layers: [8]
+    dropout_rates: [0.2]
 
-  # Two-layer compact head
-  - hidden_layers: [128, 64]
-    dropout_rates: [0.1, 0.1]
+  - hidden_layers: [8]
+    dropout_rates: [0.01]
 
-  # Two equal layers
-  - hidden_layers: [128, 128]
-    dropout_rates: [0.0, 0.0]
+  - hidden_layers: [512]
+    dropout_rates: [0.2]
 
-  # Three-layer narrow head
-  - hidden_layers: [64, 32, 16]
-    dropout_rates: [0.0, 0.1, 0.2]
+  - hidden_layers: [512]
+    dropout_rates: [0.001]
 
-  # Medium 3-layer with uniform dropout
-  - hidden_layers: [128, 64, 32]
-    dropout_rates: [0.1, 0.1, 0.1]
-
-  # Narrow consistent dropout
-  - hidden_layers: [64, 64]
+  - hidden_layers: [16, 8]
     dropout_rates: [0.2, 0.2]
 
-  # Mildly regularized decreasing width
-  - hidden_layers: [128, 64, 32]
-    dropout_rates: [0.3, 0.2, 0.1]
+  - hidden_layers: [16, 8]
+    dropout_rates: [0.001, 0.001]
 
-  # Compact deep
-  - hidden_layers: [64, 64, 64, 64]
-    dropout_rates: [0.1, 0.1, 0.1, 0.1]
+  - hidden_layers: [512, 128]
+    dropout_rates: [0.2, 0.2]
 
-  # Classic deep compression head
-  - hidden_layers: [256, 128, 64, 32]
-    dropout_rates: [0.2, 0.2, 0.2, 0.2]
+  - hidden_layers: [512, 128]
+    dropout_rates: [0.001, 0.001]
 
-  # Light deep head
-  - hidden_layers: [128, 64, 32, 16]
-    dropout_rates: [0.1, 0.1, 0.1, 0.1]
+  - hidden_layers: [16, 8, 4]
+    dropout_rates: [0.2, 0.2, 0.2]
 
-  # Test variant with mixed dropout
-  - hidden_layers: [256, 64, 128]
-    dropout_rates: [0.1, 0.3, 0.2]
+  - hidden_layers: [16, 8, 4]
+    dropout_rates: [0.001, 0.001, 0.001]
+
+  - hidden_layers: [512, 128, 64]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [512, 128, 64]
+    dropout_rates: [0.001, 0.001, 0.001]
+
+  - hidden_layers: [8, 16]
+    dropout_rates: [0.2, 0.2]
+
+  - hidden_layers: [8, 16]
+    dropout_rates: [0.001, 0.001]
+
+  - hidden_layers: [128, 512]
+    dropout_rates: [0.2, 0.2]
+
+  - hidden_layers: [128, 512]
+    dropout_rates: [0.001, 0.001]
+
+  - hidden_layers: [4, 8, 16]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [4, 8, 16]
+    dropout_rates: [0.001, 0.001, 0.001]
+
+  - hidden_layers: [64, 128, 512]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [64, 128, 512]
+    dropout_rates: [0.001, 0.001, 0.001]

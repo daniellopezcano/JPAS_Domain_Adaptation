@@ -2,8 +2,8 @@
 # Weights & Biases Sweep Configuration
 # ════════════════════════════════════════════════════════════════
 
-method: random                     # Sweep search strategy
-name: "wandb_DA_my_sweep_1"      # Name of the sweep
+method: random                           # Sweep search strategy
+name: "wandb_DA"                      # Name of the sweep
 
 # ════════════════════════════════════════════════════════════════
 # Parameters to sweep over
@@ -11,35 +11,41 @@ name: "wandb_DA_my_sweep_1"      # Name of the sweep
 parameters:
 
   aux_config_path:
-    value: aux_wandb_DA.yaml
+    values: [
+      "aux_wandb_DA_my-sweep-0.yaml",
+      "aux_wandb_DA_leafy-sweep-59.yaml",
+      "aux_wandb_DA_revived-sweep-55.yaml",
+      "aux_wandb_DA_kind-sweep-46.yaml",
+      "aux_wandb_DA_olive-sweep-43.yaml"
+    ] 
 
   # ── Training Config ──
+  l2_lambda:
+    distribution: log_uniform_values
+    min: 0.00000001
+    max: 1.0
+  
   NN_batches_per_epoch:
     distribution: int_uniform
-    min: 512
-    max: 8192
+    min: 2048
+    max: 16384
 
   batch_size:
     distribution: int_uniform
-    min: 512
-    max: 65536
+    min: 1024
+    max: 15597
 
   lr:
     distribution: log_uniform_values
-    min: 0.0001
+    min: 0.00001
     max: 0.1
 
   weight_decay:
     distribution: log_uniform_values
-    min: 0.00001
-    max: 0.01
+    min: 0.000001
+    max: 0.1
 
   clip_grad_norm:
     distribution: log_uniform_values
-    min: 0.005
-    max: 500.0
-
-  seed:
-    distribution: int_uniform
-    min: 0
-    max: 1000
+    min: 0.00001
+    max: 10.0

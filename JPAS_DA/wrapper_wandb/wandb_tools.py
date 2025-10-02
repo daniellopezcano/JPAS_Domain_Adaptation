@@ -19,7 +19,7 @@ def wandb_sweep(path_wandb_config, wandb_project_name, N_samples_hyperparameters
     # Log in to wandb
     logging.info("🔑 Logging into wandb...")
     wandb.login()
-  
+    
     # Initialize sweep
     logging.info(f"📊 Creating wandb sweep for project: {wandb_project_name}")
     sweep_id = wandb.sweep(wandb_config, project=wandb_project_name)
@@ -38,7 +38,12 @@ def make_wandb_train(wandb_project_name):
     def wandb_train(
             config=None,
             sweep_keys = [
-                "NN_epochs", "NN_batches_per_epoch", "batch_size", "batch_size_val", "lr", "weight_decay", "clip_grad_norm", "seed"
+                "l2_lambda",
+                "NN_batches_per_epoch",
+                "batch_size",
+                "lr",
+                "weight_decay",
+                "clip_grad_norm"
             ]
         ):
         """
@@ -50,7 +55,7 @@ def make_wandb_train(wandb_project_name):
         >>> wandb_train(config={"run_name": "test_run", "path_save": "./models", "lr": 0.001})
         """
         logging.info("Starting wandb training...")
-
+        
         with wandb.init(config=config) as run:
 
             config = wandb.config
@@ -61,7 +66,7 @@ def make_wandb_train(wandb_project_name):
             aux_config_path = os.path.join(global_setup.path_configs, config["aux_config_path"])
             with open(aux_config_path, "r") as f:
                 full_config = yaml.safe_load(f)
-
+                
             if full_config["models"]["path_load"] is None:
                 # Extract and remove model options
                 encoders = full_config.pop("encoders", None)

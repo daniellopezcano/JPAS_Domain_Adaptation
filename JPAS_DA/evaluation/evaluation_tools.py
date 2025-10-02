@@ -468,7 +468,7 @@ def plot_multiclass_rocs(
     *,
     dict_cases,                      # {case: {"y_true": (N,), "y_pred": (N,C), "plot_kwargs": {...}}}
     class_names=None,               # list[str] in y_pred column order; if None -> inferred from labels
-    class_colors=None,              # dict{name->color} OR list[str] of length C; if None -> use per-CASE colors from dict_cases
+    cmap="plasma",                  # <- NEW: any Matplotlib colormap name or Colormap object
     class_legend_loc="lower right",
     case_legend_loc="lower left",
     figsize=(8, 8),
@@ -494,10 +494,10 @@ def plot_multiclass_rocs(
     """
     Single-panel multi-class ROC overlay.
 
-    Coloring rule:
-      - If class_colors is None (default): color curves by CASE using
-        dict_cases[case]['plot_kwargs']['color'] (if missing, fall back to Matplotlib cycle).
-      - Else: color curves by CLASS using class_colors (original behavior).
+    Colors are assigned PER CLASS from the provided colormap (`cmap`), while line
+    style/markers come from each case's `plot_kwargs`. Two legends are shown:
+      - Classes (color): one entry per class using the colormap.
+      - Cases (style): black handles showing linestyle/marker/linewidth for each case.
     """
     if not dict_cases:
         raise ValueError("dict_cases must contain at least one case.")
@@ -520,27 +520,12 @@ def plot_multiclass_rocs(
         if y_pred.ndim != 2 or y_pred.shape[1] != C:
             raise ValueError(f"[{nm}] y_pred must be (N,{C}). Got {y_pred.shape}.")
 
-    # --- Color logic ---
-    color_by_case = (class_colors is None)
-
-    if color_by_case:
-        # Build per-CASE color map from plot_kwargs (fallback to cycle)
-        cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
-        per_case_color = {}
-        for i, case in enumerate(case_names):
-            pkw = dict(dict_cases[case].get("plot_kwargs", {}))
-            col = pkw.get("color", (cycle[i % len(cycle)] if cycle else f"C{i}"))
-            per_case_color[case] = col
-        # For class legend later (if shown), use a neutral color since color no longer encodes class
-        cls_colors_list = ["black"] * C
-    else:
-        # Original: colors per CLASS
-        if isinstance(class_colors, dict):
-            cls_colors_list = [class_colors.get(class_names_used[i], plt.cm.tab10(i % 10)) for i in range(C)]
-        else:
-            if len(class_colors) != C:
-                raise ValueError("class_colors must have length equal to number of classes.")
-            cls_colors_list = list(class_colors)
+    # --- Build per-CLASS colors from the colormap ---
+    # Accept either a string name or a Colormap object
+    cm = plt.cm.get_cmap(cmap) if isinstance(cmap, str) else cmap
+    # sample evenly across [0,1)
+    samples = np.linspace(0, 1, C, endpoint=False) if getattr(cm, "N", None) is None or cm.N < C else np.arange(C) / max(1, C)
+    cls_colors_list = [cm(s) for s in samples[:C]]
 
     # Figure
     fig, ax = plt.subplots(figsize=figsize)
@@ -579,11 +564,7 @@ def plot_multiclass_rocs(
             ms = pkw.get("markersize", 6)
             label_case = pkw.get("label", case)
 
-            # --- choose color
-            if color_by_case:
-                color = per_case_color[case]
-            else:
-                color = cls_colors_list[i_cls]
+            color = cls_colors_list[i_cls]
 
             # ROC (skip if not computable)
             try:
@@ -625,54 +606,30 @@ def plot_multiclass_rocs(
         ax.set_title(title)
 
     # Legends
-    if color_by_case:
-        # Classes legend (neutral color; color no longer indicates class)
-        class_handles = [
-            Line2D([0], [0], color="black", lw=3, ls='-', label=class_names_used[i])
-            for i in range(C)
-        ]
-        leg_classes = ax.legend(handles=class_handles, loc=class_legend_loc,
-                                fontsize=legend_fontsize, title="Classes")
-        ax.add_artist(leg_classes)
+    # Classes legend (colors from cmap)
+    class_handles = [
+        Line2D([0], [0], color=cls_colors_list[i], lw=3, ls='-', label=class_names_used[i])
+        for i in range(C)
+    ]
+    leg_classes = ax.legend(handles=class_handles, loc=class_legend_loc,
+                            fontsize=legend_fontsize, title="Classes")
+    ax.add_artist(leg_classes)
 
-        # Cases legend — show case COLORS and styles
-        case_handles = []
-        for case in case_names:
-            pkw = dict(dict_cases[case].get("plot_kwargs", {}))
-            ls = pkw.get("linestyle", "-")
-            lw = pkw.get("linewidth", linewidth_default)
-            marker = pkw.get("marker", None)
-            ms = pkw.get("markersize", 6)
-            label_case = pkw.get("label", case)
-            case_handles.append(
-                Line2D([0], [0], color=per_case_color[case], lw=lw, ls=ls,
-                       marker=marker, markersize=ms, label=label_case)
-            )
-        ax.legend(handles=case_handles, loc=case_legend_loc, fontsize=legend_fontsize, title="Cases")
-    else:
-        # Original behavior: color encodes CLASS, cases shown in black
-        class_handles = [
-            Line2D([0], [0], color=cls_colors_list[i], lw=3, ls='-', label=class_names_used[i])
-            for i in range(C)
-        ]
-        leg_classes = ax.legend(handles=class_handles, loc=class_legend_loc,
-                                fontsize=legend_fontsize, title="Classes")
-        ax.add_artist(leg_classes)
+    # Cases legend — black handles showing each case's style
+    case_handles = []
+    for case in case_names:
+        pkw = dict(dict_cases[case].get("plot_kwargs", {}))
+        ls = pkw.get("linestyle", "-")
+        lw = pkw.get("linewidth", linewidth_default)
+        marker = pkw.get("marker", None)
+        ms = pkw.get("markersize", 6)
+        label_case = pkw.get("label", case)
+        case_handles.append(
+            Line2D([0], [0], color="black", lw=lw, ls=ls, marker=marker, markersize=ms, label=label_case)
+        )
+    ax.legend(handles=case_handles, loc=case_legend_loc, fontsize=legend_fontsize, title="Cases")
 
-        case_handles = []
-        for case in case_names:
-            pkw = dict(dict_cases[case].get("plot_kwargs", {}))
-            ls = pkw.get("linestyle", "-")
-            lw = pkw.get("linewidth", linewidth_default)
-            marker = pkw.get("marker", None)
-            ms = pkw.get("markersize", 6)
-            label_case = pkw.get("label", case)
-            case_handles.append(
-                Line2D([0], [0], color="black", lw=lw, ls=ls, marker=marker, markersize=ms, label=label_case)
-            )
-        ax.legend(handles=case_handles, loc=case_legend_loc, fontsize=legend_fontsize, title="Cases")
-
-    # AUC text boxes
+    # AUC text boxes at the point furthest from (1,0), with per-curve styling
     if draw_auc_text and curves:
         curves.sort(key=lambda d: (d["class_idx"], d["case"]))
         for k, rec in enumerate(curves):
@@ -1027,7 +984,11 @@ def compare_models_performance(
     best_line_kwargs={"ls": "--", "lw": 1.8, "alpha": 0.9}, # "color" intentionally omitted; it’s set to the winner’s bar color
     # Title-as-text-in-axes options
     metric_title_fontsize=22,
-    metric_title_bbox={"facecolor": "white", "alpha": 0.9, "boxstyle": "round,pad=0.2", "edgecolor": "k"}
+    metric_title_bbox={"facecolor": "white", "alpha": 0.9, "boxstyle": "round,pad=0.2", "edgecolor": "k"},
+    # ===========================
+    # NEW: print a metrics table
+    # ===========================
+    show_table=True,
 ):
     """
     Multi-subpanel comparison of global metrics. One subplot per metric, each with its own y-axis.
@@ -1111,6 +1072,38 @@ def compare_models_performance(
         }
         for metric in include_metrics:
             per_case_vals[metric].append(vals_map[metric])
+
+    # ===========================
+    # NEW: pretty-printed table
+    # ===========================
+    if show_table:
+        # Case display names (prefer plot label if present)
+        case_labels = [dict_cases[nm].get("plot_kwargs", {}).get("label", nm) for nm in case_names]
+        # Build string table
+        header_cells = ["Metric"] + case_labels
+        # compute column widths
+        col_widths = [max(len("Metric"), max(len(m) for m in include_metrics))]
+        for j in range(len(case_labels)):
+            max_val_width = max(
+                len(f"{v:.4f}") if (isinstance(v, (int, float)) and np.isfinite(v)) else len("n/a")
+                for v in (per_case_vals[m][j] for m in include_metrics)
+            )
+            col_widths.append(max(len(case_labels[j]), max_val_width))
+        # print header
+        header_row = " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(header_cells))
+        sep = "-+-".join("-" * w for w in col_widths)
+        print("\n=== Global Metrics Table ===")
+        print(header_row)
+        print(sep)
+        # rows
+        for m in include_metrics:
+            row = [m.ljust(col_widths[0])]
+            for j in range(len(case_labels)):
+                v = per_case_vals[m][j]
+                s = f"{v:.4f}" if (isinstance(v, (int, float)) and np.isfinite(v)) else "n/a"
+                row.append(s.rjust(col_widths[j + 1]))
+            print(" | ".join(row))
+        print()  # trailing newline
 
     # figure & subpanels (share x across rows)
     M = len(include_metrics)
@@ -1239,6 +1232,7 @@ def compare_models_performance(
             ax.axhline(best_val, **line_kwargs)
 
     # hide any unused axes
+    M = len(include_metrics)
     for idx_extra in range(M, nrows * ncols):
         r = idx_extra // ncols
         c = idx_extra % ncols
@@ -1250,13 +1244,15 @@ def compare_models_performance(
 
     # margins & spacing
     fig.subplots_adjust(left=left_margin, hspace=subplot_hspace, wspace=subplot_wspace)
+    fig.tight_layout()
 
+    # save
     if save_path is not None:
-        import os
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
         fig.savefig(save_path, bbox_inches="tight")
 
     return fig, axes
+
 
 def compare_models_performance_per_class(
     *,

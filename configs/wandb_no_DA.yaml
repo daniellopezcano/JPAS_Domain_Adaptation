@@ -2,7 +2,7 @@
 # Weights & Biases Sweep Configuration
 # ════════════════════════════════════════════════════════════════
 
-method: random                     # Sweep search strategy
+method: random                           # Sweep search strategy
 name: "wandb_no_DA"                      # Name of the sweep
 
 # ════════════════════════════════════════════════════════════════
@@ -16,19 +16,24 @@ parameters:
   # ── Architecture Outputs ──
   output_dim:
     distribution: int_uniform
-    min: 4
-    max: 24
+    min: 2
+    max: 32
 
   # ── Training Config ──
+  l2_lambda:
+    distribution: log_uniform_values
+    min: 0.0000000001
+    max: 1.0
+  
   NN_batches_per_epoch:
     distribution: int_uniform
     min: 2048
-    max: 8192
+    max: 16384
 
   batch_size:
     distribution: int_uniform
     min: 1024
-    max: 8192
+    max: 131072
 
   lr:
     distribution: log_uniform_values
@@ -37,23 +42,18 @@ parameters:
 
   weight_decay:
     distribution: log_uniform_values
-    min: 0.00001
-    max: 0.01
+    min: 0.000001
+    max: 0.1
 
   clip_grad_norm:
     distribution: log_uniform_values
-    min: 0.05
-    max: 500.0
-
-  seed:
-    distribution: int_uniform
-    min: 0
-    max: 1000
+    min: 0.0001
+    max: 100.0
 
   # ── Architecture Selector Indices ──
   encoder_id:
-    values: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
   downstream_id:
-    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 

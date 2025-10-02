@@ -595,6 +595,215 @@ def plot_histogram_with_ranges(
     # Return the dictionary of masks
     return masks_dict
 
+def plot_multi_histograms_two_legends(
+    *,
+    series,                           # list of dicts: {"values": array, "survey": str, "cls": str, "label": Optional[str], "bins": Optional[int]}
+    ranges=None,                      # list[(low, high)] for shaded bands
+    range_colors=None,                # list[str] same length as ranges
+    bins=200,                         # default bins if a series doesn't specify its own
+    # style maps
+    survey_styles=None,               # dict: survey -> linestyle (e.g., {"JPAS_x_DESI_Raul":"-","DESI_mocks_Raul":"--"})
+    survey_labels=None,               # dict: survey -> display label (e.g., {"JPAS_x_DESI_Raul":"JPAS Obs.","DESI_mocks_Raul":"Mocks"})
+    class_colors=None,                # dict: cls -> color
+    class_labels=None,                # dict: cls -> display label
+    # axes/title
+    x_label='DESI Magnitude (R)',
+    y_label="Normalized Frequency (fraction of 'All' in range)",
+    title=None,
+    x_range=None,
+    y_range=None,
+    figsize=(7, 5),
+    # legends
+    show_survey_legend=True,
+    survey_legend_loc='upper right',
+    show_class_legend=True,
+    class_legend_loc='upper left',
+    legend_fontsize=12,
+    # log scaling
+    logy=False,
+    # optional label on curve
+    label_on_curve=False,
+    label_fontsize=11,
+    label_x_offset=0.0,
+    label_y_offset_frac=0.08,
+    label_y_offset_dec=0.06,
+    # band annotations
+    show_band_counts=True,            # now only raw N (no percentages)
+    band_box_alpha=0.9,
+    band_box_pad=0.2,
+    band_fontsize=10,
+    band_y_offset_frac=0.06,
+    band_y_offset_dec=0.04,
+    band_series_vstack=0.015,
+    band_series_vstack_dec=0.02,
+    # line width
+    linewidth=2.0,
+):
+    """
+    Plot multiple magnitude histograms normalized PER SURVEY by that survey's
+    'All' population within the displayed magnitude range (x_range).
+    Subclass curves are divided by N_all_in_range(survey). Band boxes show raw N.
+    """
+    survey_styles = {} if survey_styles is None else dict(survey_styles)
+    survey_labels = {} if survey_labels is None else dict(survey_labels)
+    class_colors  = {} if class_colors  is None else dict(class_colors)
+    class_labels  = {} if class_labels  is None else dict(class_labels)
+
+    if ranges is not None and range_colors is not None:
+        if len(ranges) != len(range_colors):
+            raise ValueError("ranges and range_colors must have the same length.")
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Determine x-lims
+    if x_range is not None:
+        xmin, xmax = x_range
+    else:
+        all_vals = np.concatenate([np.asarray(s["values"]) for s in series if len(s.get("values", [])) > 0])
+        xmin, xmax = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
+
+    # Shaded magnitude bands
+    if ranges is not None and range_colors is not None:
+        for (low, high), col in zip(ranges, range_colors):
+            ax.axvspan(low, high, color=col, alpha=0.3, linewidth=0)
+
+    # ── Per-survey normalization baselines: N_all_in_range[survey]
+    surveys = sorted({s.get("survey", "unknown") for s in series})
+    N_all_in_range = {}
+    for sv in surveys:
+        all_series = [s for s in series if s.get("survey") == sv and s.get("cls") == "All"]
+        if not all_series:
+            raise ValueError(f"Normalization requires an 'All' series for survey '{sv}'.")
+        # baseline = count of 'All' within x_range for that survey
+        vals = np.asarray(all_series[0]["values"])
+        vals = vals[np.isfinite(vals)]
+        mask_range = (vals >= xmin) & (vals <= xmax)
+        N_all_in_range[sv] = int(np.sum(mask_range))
+
+    # Plot each series (normalized by its survey's baseline)
+    plotted = []
+    for s in series:
+        vals = np.asarray(s["values"])
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            continue
+
+        this_bins = int(s.get("bins", bins))
+        survey = s.get("survey", "unknown")
+        cls    = s.get("cls", "unknown")
+        color  = class_colors.get(cls, "black")
+        ls     = survey_styles.get(survey, "-")
+        disp_s = survey_labels.get(survey, survey)
+        disp_c = class_labels.get(cls, cls)
+        lab    = s.get("label", f"{disp_s} · {disp_c}")
+
+        counts, edges = np.histogram(vals, bins=this_bins, range=(xmin, xmax))
+        centers = 0.5 * (edges[:-1] + edges[1:])
+
+        denom = max(N_all_in_range.get(survey, 0), 1)  # PER SURVEY baseline
+        norm_counts = counts.astype(float) / float(denom)
+
+        ax.plot(centers, norm_counts, color=color, linestyle=ls, linewidth=linewidth, label=lab)
+
+        if label_on_curve and norm_counts.size:
+            imax = int(np.argmax(norm_counts))
+            x_peak, y_peak = centers[imax], float(norm_counts[imax])
+            if logy:
+                y_text = max(y_peak, 1e-16) * (10.0 ** label_y_offset_dec)
+            else:
+                y_text = y_peak * (1.0 + label_y_offset_frac)
+            ax.text(
+                x_peak + label_x_offset, y_text, lab,
+                color=color, fontsize=label_fontsize, ha='center', va='bottom',
+                bbox=dict(facecolor='white', edgecolor=color, linestyle=ls,
+                          boxstyle=f'round,pad={band_box_pad}', linewidth=1.2, alpha=band_box_alpha)
+            )
+
+        plotted.append({
+            "survey": survey, "cls": cls, "label": lab, "color": color, "ls": ls,
+            "norm_counts": norm_counts, "counts": counts, "edges": edges, "centers": centers,
+            "N_all_range": denom,
+        })
+
+    # Band text boxes: only raw N (no %), placed above each curve at the band center
+    if show_band_counts and (ranges is not None) and len(plotted) > 0:
+        ax.relim(); ax.autoscale_view()
+        ylo, yhi = ax.get_ylim()
+        ax_span = max(yhi - ylo, 1e-16)
+
+        for s_idx, info in enumerate(plotted):
+            counts  = info["counts"]
+            ncounts = info["norm_counts"]
+            edges   = info["edges"]
+            centers = info["centers"]
+            color, ls = info["color"], info["ls"]
+
+            if counts.size == 0:
+                continue
+
+            for (low, high) in ranges:
+                x_mid = 0.5 * (low + high)
+                j = int(np.argmin(np.abs(centers - x_mid)))
+                y_here = float(ncounts[j])
+
+                # count objects whose bin overlaps the band
+                bin_lefts = edges[:-1]; bin_rights = edges[1:]
+                left  = max(low, edges[0]); right = min(high, edges[-1])
+                overlap = (bin_rights > left) & (bin_lefts < right)
+                N_band = int(np.sum(counts[overlap]))
+
+                if logy:
+                    y_text = max(y_here, 1e-16) * (10.0 ** (band_y_offset_dec + s_idx * band_series_vstack_dec))
+                else:
+                    y_text = y_here + (band_y_offset_frac + s_idx * band_series_vstack) * ax_span
+
+                ax.text(
+                    x_mid, y_text, f"N={N_band}",
+                    ha='center', va='bottom', fontsize=band_fontsize, color='black',
+                    bbox=dict(facecolor='white', edgecolor=color, linestyle=ls,
+                              boxstyle=f'round,pad={band_box_pad}', linewidth=1.5, alpha=band_box_alpha)
+                )
+
+    # Axes
+    ax.set_xlabel(x_label, fontsize=18)
+    ax.set_ylabel(y_label, fontsize=18)
+    if title:
+        ax.set_title(title, fontsize=20)
+
+    if x_range is not None:
+        ax.set_xlim(x_range)
+    if y_range is not None:
+        ax.set_ylim(y_range)
+
+    if logy:
+        ax.set_yscale('log')
+
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+    # Two legends via proxy artists
+    if show_survey_legend and survey_styles:
+        handles1, labels1 = [], []
+        for survey, ls in survey_styles.items():
+            disp = survey_labels.get(survey, survey)
+            h = Line2D([0], [0], color='black', linestyle=ls, linewidth=linewidth, label=disp)
+            handles1.append(h); labels1.append(disp)
+        leg1 = ax.legend(handles=handles1, labels=labels1, title="Survey", ncols=1,
+                         loc=survey_legend_loc, fontsize=legend_fontsize, title_fontsize=legend_fontsize)
+        ax.add_artist(leg1)
+
+    if show_class_legend and class_colors:
+        handles2, labels2 = [], []
+        for cls, col in class_colors.items():
+            disp = class_labels.get(cls, cls)
+            h = Line2D([0], [0], color=col, linestyle='-', linewidth=linewidth, label=disp)
+            handles2.append(h); labels2.append(disp)
+        leg2 = ax.legend(handles=handles2, labels=labels2, title="Class", ncols=5,
+                         loc=class_legend_loc, fontsize=legend_fontsize, title_fontsize=legend_fontsize)
+        ax.add_artist(leg2)
+
+    fig.tight_layout()
+    return fig, ax
+
 def plot_histogram_with_ranges_multiple(
     mag_dict,
     ranges,

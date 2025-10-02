@@ -22,11 +22,11 @@ models:
   encoder:
     hidden_layers: [256, 128, 64]
     dropout_rates: [0.001, 0.001, 0.001]
-    output_dim: 8
+    output_dim: 16
     use_batchnorm: False
 
   downstream:
-    hidden_layers: [100, 86]
+    hidden_layers: [96, 96]
     dropout_rates: [0.001, 0.001]
     use_batchnorm: False
 
@@ -41,10 +41,10 @@ training:
   freeze_downstream_model: false
   l2_lambda: 0.0
 
-  NN_epochs: 3000
+  NN_epochs: 2500
   NN_batches_per_epoch: 8192
   batch_size: 65536
-  batch_size_val: null
+  batch_size_val: 15597
 
   lr: 0.005
   weight_decay: 1.0e-09

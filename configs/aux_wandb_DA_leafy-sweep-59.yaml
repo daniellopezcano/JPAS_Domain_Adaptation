@@ -1,0 +1,46 @@
+# ════════════════════════════════════════════════════════════════
+# Global Configuration
+# ════════════════════════════════════════════════════════════════
+global:
+  N_threads: 8
+
+# ════════════════════════════════════════════════════════════════════
+# Data Configuration
+# ════════════════════════════════════════════════════════════════════
+data:
+  cleaning_config: default_global_setup
+  keys_xx: ["all_observations_normalized", "MORPHTYPE_int"]
+  keys_yy: ["SPECTYPE_int"]
+  key_survey_training: JPAS_x_DESI_Raul
+
+# ════════════════════════════════════════════════════════════════════
+# Model Architecture
+# ════════════════════════════════════════════════════════════════════
+models:
+  path_load: wandb_no_DA/leafy-sweep-59
+
+  encoder:
+    dropout_rates: [0.001, 0.001]
+    use_batchnorm: False
+
+  downstream:
+    dropout_rates: [0.001]
+    use_batchnorm: False
+
+# ════════════════════════════════════════════════════════════════════
+# Training Configuration
+# ════════════════════════════════════════════════════════════════════
+training:
+  path_save: default_global_setup
+  default_overwrite : False
+
+  sampling_strategy: true_random
+  freeze_downstream_model: True
+  
+  NN_epochs: 2500
+  batch_size_val: 15597
+
+  seed_mode: deterministic
+  seed : 137
+
+  device: cuda

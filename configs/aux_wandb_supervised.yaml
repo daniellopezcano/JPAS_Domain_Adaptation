@@ -1,0 +1,143 @@
+# ════════════════════════════════════════════════════════════════
+# Global Configuration
+# ════════════════════════════════════════════════════════════════
+global:
+  N_threads: 8
+
+# ════════════════════════════════════════════════════════════════════
+# Data Configuration
+# ════════════════════════════════════════════════════════════════════
+data:
+  cleaning_config: default_global_setup
+  keys_xx: ["all_observations_normalized", "MORPHTYPE_int"]
+  keys_yy: ["SPECTYPE_int"]
+  key_survey_training: JPAS_x_DESI_Raul
+
+# ════════════════════════════════════════════════════════════════════
+# Model Architecture
+# ════════════════════════════════════════════════════════════════════
+models:
+  path_load: null
+
+# ════════════════════════════════════════════════════════════════════
+# Training Configuration
+# ════════════════════════════════════════════════════════════════════
+training:
+  path_save: default_global_setup
+  default_overwrite : False
+
+  sampling_strategy: true_random
+  freeze_downstream_model: false
+  
+  NN_epochs: 2500
+  batch_size_val: 15597
+
+  seed_mode: deterministic
+  seed : 137
+
+  device: cuda
+
+# ════════════════════════════════════════════════════════════════
+# Model Options
+# ════════════════════════════════════════════════════════════════
+
+encoders:
+
+  - hidden_layers: [8]
+    dropout_rates: [0.2]
+
+  - hidden_layers: [8]
+    dropout_rates: [0.01]
+
+  - hidden_layers: [512]
+    dropout_rates: [0.2]
+
+  - hidden_layers: [512]
+    dropout_rates: [0.001]
+
+  - hidden_layers: [16, 8]
+    dropout_rates: [0.2, 0.2]
+
+  - hidden_layers: [16, 8]
+    dropout_rates: [0.001, 0.001]
+
+  - hidden_layers: [512, 128]
+    dropout_rates: [0.2, 0.2]
+
+  - hidden_layers: [512, 128]
+    dropout_rates: [0.001, 0.001]
+
+  - hidden_layers: [16, 8, 4]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [16, 8, 4]
+    dropout_rates: [0.001, 0.001, 0.001]
+
+  - hidden_layers: [512, 128, 64]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [512, 128, 64]
+    dropout_rates: [0.001, 0.001, 0.001]
+
+
+downstreams:
+
+  - hidden_layers: [8]
+    dropout_rates: [0.2]
+
+  - hidden_layers: [8]
+    dropout_rates: [0.01]
+
+  - hidden_layers: [512]
+    dropout_rates: [0.2]
+
+  - hidden_layers: [512]
+    dropout_rates: [0.001]
+
+  - hidden_layers: [16, 8]
+    dropout_rates: [0.2, 0.2]
+
+  - hidden_layers: [16, 8]
+    dropout_rates: [0.001, 0.001]
+
+  - hidden_layers: [512, 128]
+    dropout_rates: [0.2, 0.2]
+
+  - hidden_layers: [512, 128]
+    dropout_rates: [0.001, 0.001]
+
+  - hidden_layers: [16, 8, 4]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [16, 8, 4]
+    dropout_rates: [0.001, 0.001, 0.001]
+
+  - hidden_layers: [512, 128, 64]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [512, 128, 64]
+    dropout_rates: [0.001, 0.001, 0.001]
+
+  - hidden_layers: [8, 16]
+    dropout_rates: [0.2, 0.2]
+
+  - hidden_layers: [8, 16]
+    dropout_rates: [0.001, 0.001]
+
+  - hidden_layers: [128, 512]
+    dropout_rates: [0.2, 0.2]
+
+  - hidden_layers: [128, 512]
+    dropout_rates: [0.001, 0.001]
+
+  - hidden_layers: [4, 8, 16]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [4, 8, 16]
+    dropout_rates: [0.001, 0.001, 0.001]
+
+  - hidden_layers: [64, 128, 512]
+    dropout_rates: [0.2, 0.2, 0.2]
+
+  - hidden_layers: [64, 128, 512]
+    dropout_rates: [0.001, 0.001, 0.001]

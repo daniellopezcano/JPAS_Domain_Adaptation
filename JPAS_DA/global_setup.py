@@ -109,7 +109,7 @@ config_dict_cleaning = {
         "enabled": True,
         "i_band_sn_threshold": 0.0,
         "magnitude_flux_key": "DESI_FLUX_R",
-        "magnitude_threshold": 22.5
+        "magnitude_threshold": 25.
     },
     "neg_errors": {
         "enabled": True

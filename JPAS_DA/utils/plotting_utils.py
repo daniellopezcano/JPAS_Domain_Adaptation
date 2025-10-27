@@ -804,6 +804,197 @@ def plot_multi_histograms_two_legends(
     fig.tight_layout()
     return fig, ax
 
+def plot_multi_histograms_two_legends_new(
+    *,
+    series,                           # list of dicts: {"values": array, "survey": str, "cls": str, "label": Optional[str], "bins": Optional[int]}
+    ranges=None,                      # keep for API compatibility; will omit in call
+    range_colors=None,                # keep for API compatibility; will omit in call
+    bins=200,
+    # style maps
+    survey_styles=None,
+    survey_labels=None,
+    class_colors=None,
+    class_labels=None,
+    # axes/title
+    x_label='DESI Magnitude (R)',
+    y_label="Normalized Frequency (fraction of 'All' in range)",
+    title=None,
+    x_range=None,
+    y_range=None,
+    figsize=(7, 5),
+    # legends
+    show_survey_legend=True,
+    survey_legend_loc='upper right',
+    show_class_legend=True,
+    class_legend_loc='upper left',
+    legend_fontsize=18,
+    # log scaling
+    logy=False,
+    # single on-curve label per curve
+    label_on_curve=True,              # now defaults True
+    curve_label_mode="count",         # "count" | "name" | "name+count"
+    total_label_fmt="N={N:,}",        # thousands separator
+    label_fontsize=18,
+    label_x_offset=0.0,
+    label_y_offset_frac=0.08,
+    label_y_offset_dec=0.06,
+    curve_label_vstack=0.02,          # vertical stacking between curves
+    # (deprecated) band annotations
+    show_band_counts=False,           # disabled by default
+    band_box_alpha=0.9,
+    band_box_pad=0.2,
+    band_fontsize=10,
+    band_y_offset_frac=0.06,
+    band_y_offset_dec=0.04,
+    band_series_vstack=0.015,
+    band_series_vstack_dec=0.02,
+    # line width
+    linewidth=2.0,
+):
+    """
+    Plot multiple magnitude histograms normalized PER SURVEY by that survey's
+    'All' population within the displayed magnitude range (x_range).
+    Subclass curves are divided by N_all_in_range(survey).
+    For each curve, optionally draw a single on-curve label with total N in range.
+    """
+    survey_styles = {} if survey_styles is None else dict(survey_styles)
+    survey_labels = {} if survey_labels is None else dict(survey_labels)
+    class_colors  = {} if class_colors  is None else dict(class_colors)
+    class_labels  = {} if class_labels  is None else dict(class_labels)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Determine x-lims
+    if x_range is not None:
+        xmin, xmax = x_range
+    else:
+        all_vals = np.concatenate([np.asarray(s["values"]) for s in series if len(s.get("values", [])) > 0])
+        xmin, xmax = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
+
+    # (No shaded magnitude bands: pass ranges=None in the call)
+
+    # ── Per-survey normalization baselines: N_all_in_range[survey]
+    surveys = sorted({s.get("survey", "unknown") for s in series})
+    N_all_in_range = {}
+    for sv in surveys:
+        all_series = [s for s in series if s.get("survey") == sv and s.get("cls") == "All"]
+        if not all_series:
+            raise ValueError(f"Normalization requires an 'All' series for survey '{sv}'.")
+        vals = np.asarray(all_series[0]["values"])
+        vals = vals[np.isfinite(vals)]
+        mask_range = (vals >= xmin) & (vals <= xmax)
+        N_all_in_range[sv] = int(np.sum(mask_range))
+
+    # Plot each series (normalized by its survey's baseline)
+    plotted = []
+    for s in series:
+        vals = np.asarray(s["values"])
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            continue
+
+        this_bins = int(s.get("bins", bins))
+        survey = s.get("survey", "unknown")
+        cls    = s.get("cls", "unknown")
+        color  = class_colors.get(cls, "black")
+        ls     = survey_styles.get(survey, "-")
+        disp_s = survey_labels.get(survey, survey)
+        disp_c = class_labels.get(cls, cls)
+        lab    = s.get("label", f"{disp_s} · {disp_c}")
+
+        counts, edges = np.histogram(vals, bins=this_bins, range=(xmin, xmax))
+        centers = 0.5 * (edges[:-1] + edges[1:])
+
+        denom = max(N_all_in_range.get(survey, 0), 1)
+        norm_counts = counts.astype(float) / float(denom)
+
+        ax.plot(centers, norm_counts, color=color, linestyle=ls, linewidth=linewidth, label=lab)
+
+        N_total = int(counts.sum())  # total within displayed range
+        plotted.append({
+            "survey": survey, "cls": cls, "label": lab, "color": color, "ls": ls,
+            "norm_counts": norm_counts, "counts": counts, "edges": edges, "centers": centers,
+            "N_all_range": denom, "N_total": N_total,
+        })
+
+    # Single on-curve label per curve (e.g., N={N})
+    if label_on_curve and len(plotted) > 0:
+        ax.relim(); ax.autoscale_view()
+        ylo, yhi = ax.get_ylim()
+        ax_span = max(yhi - ylo, 1e-16)
+
+        for s_idx, info in enumerate(plotted):
+            ncounts = info["norm_counts"]
+            centers = info["centers"]
+            color, ls = info["color"], info["ls"]
+            lab = info["label"]
+            N_total = info["N_total"]
+
+            if ncounts.size == 0:
+                continue
+
+            imax = int(np.argmax(ncounts))
+            x_peak, y_peak = centers[imax], float(ncounts[imax])
+
+            if curve_label_mode == "name":
+                text = f"{lab}"
+            elif curve_label_mode == "name+count":
+                text = f"{lab} ({total_label_fmt.format(N=N_total)})"
+            else:  # "count"
+                text = total_label_fmt.format(N=N_total)
+
+            if logy:
+                y_text = max(y_peak, 1e-16) * (10.0 ** (label_y_offset_dec + s_idx * label_y_offset_dec))
+            else:
+                y_text = y_peak + (label_y_offset_frac + s_idx * curve_label_vstack) * ax_span
+
+            ax.text(
+                x_peak + label_x_offset, y_text, text,
+                color='black', fontsize=label_fontsize, ha='center', va='bottom',
+                bbox=dict(facecolor='white', edgecolor=color, linestyle=ls,
+                          boxstyle=f'round,pad=0.3', linewidth=2.2, alpha=0.9)
+            )
+
+    # Axes
+    ax.set_xlabel(x_label, fontsize=20)
+    ax.set_ylabel(y_label, fontsize=20)
+    if title:
+        ax.set_title(title, fontsize=20)
+
+    if x_range is not None:
+        ax.set_xlim(x_range)
+    if y_range is not None:
+        ax.set_ylim(y_range)
+
+    if logy:
+        ax.set_yscale('log')
+
+    ax.tick_params(axis='both', which='major', labelsize=20)
+
+    # Two legends via proxy artists
+    if show_survey_legend and survey_styles:
+        handles1, labels1 = [], []
+        for survey, ls in survey_styles.items():
+            disp = survey_labels.get(survey, survey)
+            h = Line2D([0], [0], color='black', linestyle=ls, linewidth=linewidth, label=disp)
+            handles1.append(h); labels1.append(disp)
+        leg1 = ax.legend(handles=handles1, labels=labels1, title="Survey", ncols=1,
+                         loc=survey_legend_loc, fontsize=legend_fontsize, title_fontsize=legend_fontsize)
+        ax.add_artist(leg1)
+
+    if show_class_legend and class_colors:
+        handles2, labels2 = [], []
+        for cls, col in class_colors.items():
+            disp = class_labels.get(cls, cls)
+            h = Line2D([0], [0], color=col, linestyle='-', linewidth=linewidth, label=disp)
+            handles2.append(h); labels2.append(disp)
+        leg2 = ax.legend(handles=handles2, labels=labels2, ncols=1,
+                         loc=class_legend_loc, fontsize=legend_fontsize, title_fontsize=legend_fontsize)
+        ax.add_artist(leg2)
+
+    fig.tight_layout()
+    return fig, ax
+
 def plot_histogram_with_ranges_multiple(
     mag_dict,
     ranges,

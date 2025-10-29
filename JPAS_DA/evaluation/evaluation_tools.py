@@ -17,6 +17,7 @@ import matplotlib.patches as mpatches
 from matplotlib.colors import Normalize
 from matplotlib.lines import Line2D
 from matplotlib import ticker as mticker
+from matplotlib import colors as mcolors
 
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, roc_auc_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
@@ -403,7 +404,7 @@ def radar_plot(
                 tick_angles, f1,
                 s=s, marker=marker,
                 facecolors=mfc if mfc is not None else "none",
-                edgecolors=mec if mec is not None else face if fill_on else (color or line.get_color()),
+                edgecolors="k",
                 linewidths=mew,
                 alpha=alpha,
                 zorder=5,
@@ -611,10 +612,10 @@ def plot_multiclass_rocs(
     case_legend_loc="lower left",
     figsize=(8, 8),
     title=None,
-    legend_fontsize=14,
+    legend_fontsize=18,
     # --- AUC text box options ---
     draw_auc_text=True,
-    auc_fontsize=9,
+    auc_fontsize=18,
     auc_box_facecolor="white",
     auc_box_alpha=0.9,
     auc_text_dx=0.0,
@@ -659,11 +660,11 @@ def plot_multiclass_rocs(
             raise ValueError(f"[{nm}] y_pred must be (N,{C}). Got {y_pred.shape}.")
 
     # --- Build per-CLASS colors from the colormap ---
-    # Accept either a string name or a Colormap object
-    cm = plt.cm.get_cmap(cmap) if isinstance(cmap, str) else cmap
-    # sample evenly across [0,1)
-    samples = np.linspace(0, 1, C, endpoint=False) if getattr(cm, "N", None) is None or cm.N < C else np.arange(C) / max(1, C)
-    cls_colors_list = [cm(s) for s in samples[:C]]
+    # Use the first C colors from Matplotlib's default color cycle (respects current style)
+    default_cycle = list(mcolors.TABLEAU_COLORS.values())
+
+    # Build RGBA list; wrap around if C > len(default cycle)
+    cls_colors_list = [mcolors.to_rgba(default_cycle[i % len(default_cycle)]) for i in range(C)]
 
     # Figure
     fig, ax = plt.subplots(figsize=figsize)
@@ -814,12 +815,12 @@ def plot_confusion_matrices_grid(
     threshold_color=0.5,                # threshold for text color switch (normalized values)
     # --- Text & fonts ---
     fs_title=24,
-    fs_label=20,
-    fs_ticks=18,
-    fs_cell=14,
-    fs_cell_diag=14,
-    fs_cbar_label=20,
-    fs_cbar_ticks=16,
+    fs_label=24,
+    fs_ticks=24,
+    fs_cell=20,
+    fs_cell_diag=18,
+    fs_cbar_label=24,
+    fs_cbar_ticks=24,
     tick_rotation=20,
     # --- Annotations & options ---
     annotate_offdiag=True,              # draw counts + normalized % on off-diagonal cells
@@ -1030,7 +1031,7 @@ def plot_confusion_matrices_grid(
                         percent = (count / denom * 100) if denom > 0 else 0.0
                     text = f"{count}\n{pct_fmt.format(percent)}"
                     ax.text(j, i, text, ha="center", va="center",
-                            color=text_color, fontsize=fs_cell, linespacing=1.2)
+                            color=text_color, fontsize=fs_cell, fontweight='bold', linespacing=1.2)
 
         # Outer labels only
         if show_outer_labels:

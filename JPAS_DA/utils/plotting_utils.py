@@ -8,11 +8,14 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 import scipy.stats as sp
 import scipy.interpolate as interp
+from scipy.interpolate import interp1d
 
 from sklearn.metrics import f1_score
+
 
 def matplotlib_default_config():
 
@@ -1698,3 +1701,344 @@ def plot_f1_difference_single_model(
 
     if show:
         plt.show()
+
+
+def plot_overlay_prob_vs_x(
+    yy,
+    probs,
+    cases,
+    *,
+    x_key="REDSHIFT",
+    x_range=(0.0, 5.0),
+    y_prob_range=(0.0, 1.0),
+    nbins=511,
+    min_per_bin=1,
+    include_scatter=True,
+    scatter_size=0.01,
+    scatter_alpha=0.35,
+    scatter_subsample=None,
+    band_alpha=0.25,
+    scale_std_fill=1/3,
+    smooth_curves=True,
+    smooth_kind="gaussian",
+    smooth_sigma_bins=1.5,
+    smooth_win_bins=None,
+    plot_unsmoothed=False,
+    curve_upsample=1,
+    kde2d=True,
+    kde2d_nx=400,
+    kde2d_ny=200,
+    kde2d_eps=1.0,
+    kde2d_alpha_cap=0.7,
+    kde2d_bw_method=None,
+    kde2d_subsample=None,
+    rng_seed=None,
+    class_names=None,
+    n_classes=4,
+    pred_color_by_class=None,
+    true_ls_by_class=None,
+    x_label=None,
+    y_label="Probability",
+    vlines=(2.1,),
+    hlines=(0.5,),
+    figsize=(12, 5),
+):
+
+    """
+    Overlay plot for multiple 'cases'. Each case contributes:
+      • global 2D KDE heatmap over (x_key, probability of target_class_id)
+      • scatter of (x_key, probability)
+      • binned median ± std curve (shared x bins across cases)
+
+    'cases' is a list of dicts with keys:
+        key_domain, key_split, key_model, true_class_id, target_class_id
+      and optional 'marker'.
+    """
+    # ---------- helpers ----------
+    def _make_kernel(kind, win_bins, sigma_bins):
+        if kind == "boxcar":
+            win = max(3, int(win_bins))
+            if win % 2 == 0:
+                win += 1
+            k = np.ones(win, dtype=float)
+        else:  # gaussian
+            win = int(win_bins) if win_bins is not None else int(max(3, 6 * sigma_bins))
+            if win % 2 == 0:
+                win += 1
+            half = win // 2
+            x = np.arange(-half, half + 1, dtype=float)
+            k = np.exp(-0.5 * (x / float(sigma_bins)) ** 2)
+        k /= k.sum()
+        return k
+
+    def _conv_smooth_nan(y, kernel):
+        # Edge-padded normalized convolution → preserves x-range
+        y = np.asarray(y, float)
+        m = np.isfinite(y)
+        if m.sum() == 0:
+            return y.copy()
+        yf = np.where(m, y, 0.0)
+        w  = np.where(m, 1.0, 0.0)
+        h = len(kernel) // 2
+        yf_pad = np.pad(yf, (h, h), mode="edge")
+        w_pad  = np.pad(w,  (h, h), mode="edge")
+        y_conv = np.convolve(yf_pad, kernel, mode="valid")
+        w_conv = np.convolve(w_pad,  kernel, mode="valid")
+        out = np.full_like(y_conv, np.nan, dtype=float)
+        ok = w_conv > 1e-12
+        out[ok] = y_conv[ok] / w_conv[ok]
+        return out
+
+    def _interp_inside(y):
+        # Fill NaNs only inside the valid span (keeps edges untouched)
+        y = np.asarray(y, float)
+        idx = np.arange(y.size)
+        m = np.isfinite(y)
+        if m.sum() < 2:
+            return y
+        y_out = np.full_like(y, np.nan, dtype=float)
+        i0, i1 = np.where(m)[0][[0, -1]]
+        y_out[i0:i1+1] = np.interp(idx[i0:i1+1], idx[m], y[m])
+        return y_out
+
+    def make_alpha_cmap(color, name="alpha_cmap", max_alpha=kde2d_alpha_cap):
+        rgba0 = (1.0, 1.0, 1.0, 0.0)
+        r, g, b = mpl.colors.to_rgb(color)
+        rgba1 = (r, g, b, max_alpha)
+        return mpl.colors.LinearSegmentedColormap.from_list(name, [rgba0, rgba1], N=256)
+
+    # ---------- config defaults ----------
+    if class_names is None:
+        class_names = {0: "QSO_high", 1: "QSO_low", 2: "GALAXY", 3: "STAR"}
+    if true_ls_by_class is None:
+        true_ls_by_class = {0: "-", 1: "--"}
+    if pred_color_by_class is None:
+        tab10 = np.array(plt.cm.get_cmap("tab10").colors[:n_classes])
+        pred_color_by_class = {
+            0: tab10[0],
+            1: tab10[1],
+            2: tab10[2] if n_classes > 2 else tab10[0],
+            3: tab10[3] if n_classes > 3 else tab10[1],
+        }
+    if x_label is None:
+        x_label = "Redshift" if x_key.upper() == "REDSHIFT" else x_key
+
+    rng = np.random.default_rng(rng_seed)
+
+    # ---------- prepare selections ----------
+    if x_range is not None:
+        xmin, xmax = x_range
+    else:
+        xmin = xmax = None
+
+    prepared = []  # list of (x_sel, p_sel, cfg)
+    for cfg in cases:
+        kd, ks, km = cfg["key_domain"], cfg["key_split"], cfg["key_model"]
+        ydict = yy[kd][ks]
+        P = probs[km][kd][ks]  # (N, C)
+
+        spectype = np.asarray(ydict["SPECTYPE_int"])
+        x = np.asarray(ydict[x_key]).astype(float)
+        tc_true = int(cfg["true_class_id"])
+        tc_tgt  = int(cfg["target_class_id"])
+
+        assert P.ndim == 2 and P.shape[0] == x.shape[0] == spectype.shape[0], "Shape mismatch"
+        assert P.shape[1] > tc_tgt, f"probs has no column {tc_tgt}"
+
+        base = (spectype == tc_true) & np.isfinite(x)
+        x_sel = x[base]
+        p_sel = P[base, tc_tgt]
+        finite = np.isfinite(p_sel)
+        x_sel, p_sel = x_sel[finite], p_sel[finite]
+        # Keep probabilities in [0,1] if needed
+        p_sel = np.clip(p_sel, y_prob_range[0], y_prob_range[1])
+
+        if x_range is not None:
+            rng_mask = (x_sel >= xmin) & (x_sel <= xmax)
+            x_sel, p_sel = x_sel[rng_mask], p_sel[rng_mask]
+
+        if x_sel.size == 0:
+            print(f"[warning] No samples for true {class_names.get(tc_true, tc_true)} in {kd}/{ks}/{km} after masking; skipping.")
+            prepared.append(None)
+            continue
+
+        prepared.append((x_sel, p_sel, cfg))
+
+    if not any(item is not None for item in prepared):
+        raise RuntimeError("No valid cases to plot after filtering.")
+
+    if x_range is None:
+        xmin = float(np.nanmin([np.nanmin(xs) for item in prepared if item is not None for xs in [item[0]]]))
+        xmax = float(np.nanmax([np.nanmax(xs) for item in prepared if item is not None for xs in [item[0]]]))
+    if not (np.isfinite(xmin) and np.isfinite(xmax) and xmin < xmax):
+        raise ValueError("Invalid x_range or x data.")
+
+    # Shared x-bins for med/std
+    edges   = np.linspace(xmin, xmax, nbins + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    # 2D KDE grid
+    y0, y1 = y_prob_range
+    if kde2d_ny < 2 or kde2d_nx < 2:
+        kde2d = False
+    x_grid = np.linspace(xmin, xmax, kde2d_nx)
+    y_grid = np.linspace(y0, y1,   kde2d_ny)
+    Xg, Yg = np.meshgrid(x_grid, y_grid)
+    pos = np.vstack([Xg.ravel(), Yg.ravel()])  # shape (2, NX*NY)
+
+    # ---------- plot ----------
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+
+    # --- Global 2D KDE per case ---
+    if kde2d:
+        for item in prepared:
+            if item is None:
+                continue
+            x_sel, p_sel, cfg = item
+            tgt = int(cfg["target_class_id"])
+            color = pred_color_by_class.get(tgt, "C0")
+
+            # Optional subsampling
+            if (kde2d_subsample is not None) and (x_sel.size > kde2d_subsample):
+                idx = rng.choice(x_sel.size, size=kde2d_subsample, replace=False)
+                x_use = x_sel[idx]
+                p_use = p_sel[idx]
+            else:
+                x_use, p_use = x_sel, p_sel
+
+            # Build KDE over (x, p)
+            vals = np.vstack([x_use, p_use])
+            try:
+                kde = sp.gaussian_kde(vals, bw_method=kde2d_bw_method)
+                d = kde(pos).reshape(Yg.shape)  # (ny, nx)
+            except np.linalg.LinAlgError:
+                # Fallback: separable Gaussian using sample mean/std
+                mu_x, mu_y = float(np.mean(x_use)), float(np.mean(p_use))
+                sx = max(1e-6, float(np.std(x_use))) * 0.5
+                sy = max(1e-6, float(np.std(p_use))) * 0.5
+                d = np.exp(-0.5 * ((Xg - mu_x) / sx) ** 2) * np.exp(-0.5 * ((Yg - mu_y) / sy) ** 2)
+                d /= (2 * np.pi * sx * sy)
+
+            # Log + normalize per CASE for visibility
+            d_log = np.log10(d + kde2d_eps)
+            dmin, dmax = np.nanmin(d_log), np.nanmax(d_log)
+            normed = (d_log - dmin) / (dmax - dmin) if dmax > dmin else np.zeros_like(d_log)
+
+            cmap = make_alpha_cmap(color, name=f"cmap_case_{tgt}", max_alpha=kde2d_alpha_cap)
+            ax.imshow(
+                normed, origin="lower",
+                extent=[xmin, xmax, y0, y1],
+                cmap=cmap, interpolation="bilinear", aspect="auto"
+            )
+
+    # --- Scatter + SMOOTHED median ± std bands ---
+    kernel = _make_kernel(smooth_kind, smooth_win_bins, smooth_sigma_bins) if smooth_curves else None
+
+    for item in prepared:
+        if item is None:
+            continue
+        x_sel, p_sel, cfg = item
+
+        tgt = int(cfg["target_class_id"])
+        tru = int(cfg["true_class_id"])
+        color  = pred_color_by_class.get(tgt, "C0")
+        ls     = true_ls_by_class.get(tru, "-")
+        marker = cfg.get("marker", "o")
+
+        if include_scatter:
+            xs, ys = x_sel, p_sel
+            # Subsample scatter per case if requested
+            if (scatter_subsample is not None) and (xs.size > scatter_subsample):
+                idx = rng.choice(xs.size, size=scatter_subsample, replace=False)
+                xs, ys = xs[idx], ys[idx]
+            ax.scatter(xs, ys, s=scatter_size, alpha=scatter_alpha,
+                       color=color, marker=marker, linewidth=0)
+
+        # Bin-wise median & std (shared edges)
+        b = np.digitize(x_sel, edges) - 1
+        b = np.clip(b, 0, nbins - 1)
+        med = np.full(nbins, np.nan); std = np.full(nbins, np.nan)
+
+        for k in range(nbins):
+            idx = (b == k)
+            if idx.sum() >= min_per_bin:
+                vals = p_sel[idx]
+                med[k] = np.nanmedian(vals)
+                std[k] = scale_std_fill * np.nanstd(vals, ddof=1) if idx.sum() > 1 else 0.0
+
+        # Interpolate inside span, smooth, upsample
+        med_i = _interp_inside(med)
+        std_i = _interp_inside(std)
+
+        if smooth_curves and kernel is not None:
+            med_s = _conv_smooth_nan(med_i, kernel)
+            std_s = _conv_smooth_nan(std_i, kernel)
+        else:
+            med_s, std_s = med_i, std_i
+
+        x_lo = float(np.nanmin(x_sel))
+        x_hi = float(np.nanmax(x_sel))
+        n_dense = max(nbins * curve_upsample, 200)
+        x_dense = np.linspace(x_lo, x_hi, n_dense)
+
+        m_ok = np.isfinite(med_s)
+        s_ok = np.isfinite(std_s)
+        if m_ok.sum() >= 2:
+            f_med = interp1d(centers[m_ok], med_s[m_ok], kind="linear", bounds_error=False, fill_value=np.nan)
+            med_dense = f_med(x_dense)
+        else:
+            med_dense = np.full_like(x_dense, np.nan)
+
+        if s_ok.sum() >= 2:
+            f_std = interp1d(centers[s_ok], std_s[s_ok], kind="linear", bounds_error=False, fill_value=np.nan)
+            std_dense = f_std(x_dense)
+        else:
+            std_dense = np.full_like(x_dense, np.nan)
+
+        if plot_unsmoothed:
+            ok0 = np.isfinite(med)
+            if np.any(ok0):
+                ax.plot(centers[ok0], med[ok0], color=color, linestyle=ls, lw=0.8, alpha=0.4)
+
+        ok = np.isfinite(med_dense)
+        if np.any(ok):
+            low = np.clip(med_dense[ok] - std_dense[ok], y0, y1)
+            hig = np.clip(med_dense[ok] + std_dense[ok], y0, y1)
+            ax.plot(x_dense[ok], med_dense[ok], color=color, linestyle=ls, lw=1.6)
+            ax.fill_between(x_dense[ok], low, hig, color=color, alpha=band_alpha, edgecolor="none")
+
+    # Cosmetics
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(y0, y1)
+    ax.set_xlabel(x_label, fontsize=20)
+    ax.set_ylabel(y_label, fontsize=20)
+
+    for xv in (vlines or []):
+        ax.axvline(xv, c="k", ls=":", lw=2)
+    for yv in (hlines or []):
+        ax.axhline(yv, c="k", ls=":", lw=2)
+
+    # Legends
+    used_tgts  = sorted({int(cfg["target_class_id"]) for cfg in [c for c in cases]})
+    used_trues = sorted({int(cfg["true_class_id"])  for cfg in [c for c in cases]})
+
+    pred_handles = [
+        Patch(facecolor=pred_color_by_class.get(t, "C0"),
+              edgecolor=pred_color_by_class.get(t, "C0"),
+              label=f"P({class_names.get(t, t)})")
+        for t in used_tgts
+    ]
+    leg_pred = ax.legend(handles=pred_handles, loc="upper right", fontsize=16,
+                         frameon=True, fancybox=True, shadow=True)
+    ax.add_artist(leg_pred)
+
+    true_handles = [
+        mpl.lines.Line2D([0], [0], color="k", lw=2.0, linestyle=true_ls_by_class.get(t, "-"),
+                         label=f"True: {class_names.get(t, t)}")
+        for t in used_trues
+    ]
+    ax.legend(handles=true_handles, loc="center right", fontsize=16,
+              frameon=True, fancybox=True, shadow=True)
+
+    plt.tight_layout()
+    return fig, ax

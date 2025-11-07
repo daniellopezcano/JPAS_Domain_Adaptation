@@ -111,7 +111,6 @@ class DataLoader:
         else:
             logging.info("├── ✔ Finished Initialization. No classification targets detected.")
 
-
     def __call__(
         self,
         batch_size,

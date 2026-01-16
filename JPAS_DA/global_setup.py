@@ -94,7 +94,13 @@ load_Ignasi = {
 config_dict_cleaning = {
     "mask_unreliable": {
         "enabled": True,
-        "indices": [0, -2]
+        "indices": [0, 55]
+        # [0, 55] correspond to the filters that DESI mocks do not cover
+        # Tray 1: [0,4,8,12,16,17,18,19,20,21,22,23,24,25]
+        # Tray 2: [2,6,10,14,26,27,28,29,30,31,32,33,34,35]
+        # Tray 3: [1,5,9,13,36,37,38,39,40,41,42,43,44,45]
+        # Tray 4: [3,7,11,15,46,47,48,49,50,51,52,53,54,55]
+        # Tray 5: [56]
     },
     "nan": {
         "enabled": True,

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="JPAS_Domain_Adaptation",
-    version="0.1.0",
+    version="1.0.0",
     author="Daniel Lopez Cano",
     author_email="daniellopezcano13@gmail.com",
     description="Domain adaptation tools for JPAS object classification.",

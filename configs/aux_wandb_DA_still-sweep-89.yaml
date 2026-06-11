@@ -17,14 +17,14 @@ data:
 # Model Architecture
 # ════════════════════════════════════════════════════════════════════
 models:
-  path_load: wandb_no_DA/kind-sweep-46
+  path_load: wandb_no_DA/still-sweep-89
 
   encoder:
     dropout_rates: [0.001, 0.001, 0.001]
     use_batchnorm: False
 
   downstream:
-    dropout_rates: [0.001, 0.001]
+    dropout_rates: [0.001, 0.001, 0.001]
     use_batchnorm: False
 
 # ════════════════════════════════════════════════════════════════════

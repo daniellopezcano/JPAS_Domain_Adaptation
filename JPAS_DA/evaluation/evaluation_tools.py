@@ -606,8 +606,9 @@ def compute_ece(y_true, y_pred_P, n_bins=10):
 def plot_multiclass_rocs(
     *,
     dict_cases,                      # {case: {"y_true": (N,), "y_pred": (N,C), "plot_kwargs": {...}}}
-    class_names=None,               # list[str] in y_pred column order; if None -> inferred from labels
-    cmap="plasma",                  # <- NEW: any Matplotlib colormap name or Colormap object
+    class_names=None,                # list[str] in y_pred column order; if None -> inferred from labels
+    palette=None,                    # optional list of colors, assigned PER CLASS
+    cmap="plasma",                   # fallback if palette is None
     class_legend_loc="lower right",
     case_legend_loc="lower left",
     figsize=(8, 8),
@@ -633,89 +634,156 @@ def plot_multiclass_rocs(
     """
     Single-panel multi-class ROC overlay.
 
-    Colors are assigned PER CLASS from the provided colormap (`cmap`), while line
-    style/markers come from each case's `plot_kwargs`. Two legends are shown:
-      - Classes (color): one entry per class using the colormap.
-      - Cases (style): black handles showing linestyle/marker/linewidth for each case.
+    Colors are assigned PER CLASS.
+
+    Priority:
+      1. If `palette` is provided, class colors are taken from `palette`.
+      2. Otherwise, class colors are sampled from `cmap`.
+
+    Line style, markers, linewidths, and labels are assigned PER CASE from
+    each case's `plot_kwargs`.
+
+    Important:
+    - `plot_kwargs["color"]` is ignored on purpose, because color encodes class.
+    - Cases are distinguished by linestyle/marker/linewidth.
     """
+
     if not dict_cases:
         raise ValueError("dict_cases must contain at least one case.")
 
     case_names = list(dict_cases.keys())
 
+    # ------------------------------------------------------------------
     # Infer classes
+    # ------------------------------------------------------------------
     if class_names is None:
-        all_y = np.concatenate([np.asarray(v["y_true"]) for v in dict_cases.values()])
+        all_y = np.concatenate([
+            np.asarray(v["y_true"])
+            for v in dict_cases.values()
+        ])
         classes = np.unique(all_y)
         class_names_used = [str(c) for c in classes]
     else:
         class_names_used = list(class_names)
         classes = np.arange(len(class_names_used))
+
     C = len(classes)
 
+    # ------------------------------------------------------------------
     # Validate shapes
+    # ------------------------------------------------------------------
     for nm, payload in dict_cases.items():
         y_pred = np.asarray(payload["y_pred"])
+
         if y_pred.ndim != 2 or y_pred.shape[1] != C:
-            raise ValueError(f"[{nm}] y_pred must be (N,{C}). Got {y_pred.shape}.")
+            raise ValueError(
+                f"[{nm}] y_pred must be (N,{C}). Got {y_pred.shape}."
+            )
 
-    # --- Build per-CLASS colors from the colormap ---
-    # Use the first C colors from Matplotlib's default color cycle (respects current style)
-    default_cycle = list(mcolors.TABLEAU_COLORS.values())
+    # ------------------------------------------------------------------
+    # Build PER-CLASS colors
+    # ------------------------------------------------------------------
+    if palette is not None:
+        palette = list(palette)
 
-    # Build RGBA list; wrap around if C > len(default cycle)
-    cls_colors_list = [mcolors.to_rgba(default_cycle[i % len(default_cycle)]) for i in range(C)]
+        if len(palette) == 0:
+            raise ValueError("palette must contain at least one color.")
 
+        # Use palette cyclically in case C > len(palette)
+        cls_colors_list = [
+            mcolors.to_rgba(palette[i % len(palette)])
+            for i in range(C)
+        ]
+
+    else:
+        cmap_obj = plt.get_cmap(cmap) if isinstance(cmap, str) else cmap
+
+        if C == 1:
+            cmap_positions = [0.5]
+        else:
+            cmap_positions = np.linspace(0.05, 0.95, C)
+
+        cls_colors_list = [
+            cmap_obj(pos)
+            for pos in cmap_positions
+        ]
+
+    # ------------------------------------------------------------------
     # Figure
+    # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=figsize)
 
     # Diagonal baseline
-    diag_kws = {"color": "0.85", "ls": "--", "lw": 1.0}
+    diag_kws = {
+        "color": "0.85",
+        "ls": "--",
+        "lw": 1.0,
+    }
+
     if isinstance(diagonal_kwargs, dict):
         diag_kws.update(diagonal_kwargs)
-    ax.plot([0, 1], [0, 1], **diag_kws, zorder=1)
 
+    ax.plot(
+        [0, 1],
+        [0, 1],
+        **diag_kws,
+        zorder=1,
+    )
+
+    # ------------------------------------------------------------------
     # Helper for marker thinning
+    # ------------------------------------------------------------------
     def _markevery(n):
         if marker_every is None:
             return None
+
         if isinstance(marker_every, int) and marker_every > 1:
             return marker_every
+
         if isinstance(marker_every, float) and 0 < marker_every < 1:
             return max(1, int(n * marker_every))
+
         return None
 
-    # Compute & plot ROC curves
+    # ------------------------------------------------------------------
+    # Compute and plot ROC curves
+    # ------------------------------------------------------------------
     curves = []
+
     for i_cls, cls in enumerate(classes):
+        class_color = cls_colors_list[i_cls]
+
         for case in case_names:
             payload = dict_cases[case]
+
             y_true = np.asarray(payload["y_true"]).astype(int)
             y_pred = np.asarray(payload["y_pred"]).astype(float)
+
             y_score = y_pred[:, i_cls]
             y_bin = (y_true == cls).astype(int)
 
-            # style from case
+            # Case style
             pkw = dict(payload.get("plot_kwargs", {}))
+
             ls = pkw.get("linestyle", "-")
             lw = pkw.get("linewidth", linewidth_default)
             marker = pkw.get("marker", None)
             ms = pkw.get("markersize", 6)
             label_case = pkw.get("label", case)
 
-            color = cls_colors_list[i_cls]
-
-            # ROC (skip if not computable)
+            # ROC curve
             try:
                 fpr, tpr, _ = roc_curve(y_bin, y_score)
             except Exception:
                 continue
-            AUC = sk_auc(fpr, tpr)
 
+            AUC = sk_auc(fpr, tpr)
             me = _markevery(len(fpr))
+
             ax.plot(
-                fpr, tpr,
-                color=color,
+                fpr,
+                tpr,
+                color=class_color,
                 linestyle=ls,
                 linewidth=lw,
                 marker=marker,
@@ -727,61 +795,108 @@ def plot_multiclass_rocs(
 
             curves.append({
                 "auc": AUC,
-                "fpr": fpr, "tpr": tpr,
+                "fpr": fpr,
+                "tpr": tpr,
                 "class_idx": i_cls,
                 "class_name": class_names_used[i_cls],
                 "case": label_case,
-                "color": color,
+                "color": class_color,
                 "linestyle": ls,
                 "linewidth": lw,
             })
 
+    # ------------------------------------------------------------------
     # Axes cosmetics
+    # ------------------------------------------------------------------
     ax.set_xlim(*x_lims)
     ax.set_ylim(*y_lims)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
+
     if title:
         ax.set_title(title)
 
-    # Legends
-    # Classes legend (colors from cmap)
+    # ------------------------------------------------------------------
+    # Classes legend: colors
+    # ------------------------------------------------------------------
     class_handles = [
-        Line2D([0], [0], color=cls_colors_list[i], lw=3, ls='-', label=class_names_used[i])
+        Line2D(
+            [0],
+            [0],
+            color=cls_colors_list[i],
+            lw=3,
+            ls="-",
+            label=class_names_used[i],
+        )
         for i in range(C)
     ]
-    leg_classes = ax.legend(handles=class_handles, loc=class_legend_loc,
-                            fontsize=legend_fontsize, title="Classes")
+
+    leg_classes = ax.legend(
+        handles=class_handles,
+        loc=class_legend_loc,
+        fontsize=legend_fontsize,
+        title="Classes",
+    )
+
     ax.add_artist(leg_classes)
 
-    # Cases legend — black handles showing each case's style
+    # ------------------------------------------------------------------
+    # Cases legend: black handles showing style
+    # ------------------------------------------------------------------
     case_handles = []
+
     for case in case_names:
         pkw = dict(dict_cases[case].get("plot_kwargs", {}))
+
         ls = pkw.get("linestyle", "-")
         lw = pkw.get("linewidth", linewidth_default)
         marker = pkw.get("marker", None)
         ms = pkw.get("markersize", 6)
         label_case = pkw.get("label", case)
-        case_handles.append(
-            Line2D([0], [0], color="black", lw=lw, ls=ls, marker=marker, markersize=ms, label=label_case)
-        )
-    ax.legend(handles=case_handles, loc=case_legend_loc, fontsize=legend_fontsize, title="Cases")
 
-    # AUC text boxes at the point furthest from (1,0), with per-curve styling
+        case_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color="black",
+                lw=lw,
+                ls=ls,
+                marker=marker,
+                markersize=ms,
+                label=label_case,
+            )
+        )
+
+    ax.legend(
+        handles=case_handles,
+        loc=case_legend_loc,
+        fontsize=legend_fontsize,
+        title="Cases",
+    )
+
+    # ------------------------------------------------------------------
+    # AUC text boxes
+    # ------------------------------------------------------------------
     if draw_auc_text and curves:
         curves.sort(key=lambda d: (d["class_idx"], d["case"]))
+
         for k, rec in enumerate(curves):
-            fpr, tpr = rec["fpr"], rec["tpr"]
+            fpr = rec["fpr"]
+            tpr = rec["tpr"]
             n = len(fpr)
+
             if n == 0:
                 continue
+
             d2 = (fpr - 1.0) ** 2 + (tpr - 0.0) ** 2
             anchor_idx = int(np.argmax(d2))
+
             step = max(1, int(auc_text_spread * n))
             idx = int(np.clip(anchor_idx + k * step, 0, n - 1))
+
             tx = float(fpr[idx]) + float(auc_text_dx)
             ty = float(tpr[idx]) + float(auc_text_dy)
+
             bbox = dict(
                 facecolor=auc_box_facecolor,
                 alpha=auc_box_alpha,
@@ -790,8 +905,17 @@ def plot_multiclass_rocs(
                 linestyle=rec["linestyle"],
                 linewidth=max(1.2, rec["linewidth"] * 0.8),
             )
-            ax.text(tx, ty, f"AUC={rec['auc']:.3f}", fontsize=auc_fontsize, color=rec["color"],
-                    ha="left", va="bottom", bbox=bbox)
+
+            ax.text(
+                tx,
+                ty,
+                f"AUC={rec['auc']:.3f}",
+                fontsize=auc_fontsize,
+                color=rec["color"],
+                ha="left",
+                va="bottom",
+                bbox=bbox,
+            )
 
     return fig, ax
 
@@ -1395,66 +1519,77 @@ def compare_models_performance(
 
 def compare_models_performance_per_class(
     *,
-    dict_cases,                         # {case_name: {"y_true": (N,), "y_pred": (N,C), "plot_kwargs": {...}}}
-    class_names=None,                   # list[str] in y_pred column order; if None, inferred from labels
+    dict_cases,
+    class_names=None,
     xtick_labels_fontsize=24,
     title=None,
     figsize=(9, 25),
-    palette=None,                       # optional list of colors for cases (fallback to tab10)
-    save_path=None,                     # save figure (suffix decides format)
+    palette=None,
+    save_path=None,
     include_metrics=("Accuracy", "F1", "TPR", "Precision", "AUROC", "ECE", "Brier"),
     # Layout
     nrows=7,
     subplot_hspace=0.1,
     subplot_wspace=0.25,
-    # Per-subpanel y-ranges (by metric)
-    y_ranges=None,                      
+    # Per-subpanel y-ranges
+    y_ranges=None,
     y_margin_frac=0.07,
     # Bars & annotations
     bar_alpha=1.0,
     bar_edgecolor="black",
-    group_width=0.9,                    
+    group_width=0.9,
     annotate_values=True,
     value_label_fontsize=9,
     # Axes cosmetics
-    ylabel_text="Score",                
+    ylabel_text="Score",
     left_margin=0.10,
     # Tick formatting
     ytick_step=None,
     ytick_format="{x:.2f}",
-    ytick_count=3,                   
-    two_line_class_xticklabels=False,   
-    # Best-line options (per class tick
-    metric_best_high_low={"Accuracy": "high", "F1": "high", "TPR": "high", "Precision": "high", "AUROC": "high", "ECE": "low", "Brier": "low"},          
-    best_line_kwargs={"ls": "--", "lw": 2.0, "alpha": 0.9},              
+    ytick_count=3,
+    two_line_class_xticklabels=False,
+    # Best-line options
+    metric_best_high_low={
+        "Accuracy": "high",
+        "F1": "high",
+        "TPR": "high",
+        "Precision": "high",
+        "AUROC": "high",
+        "ECE": "low",
+        "Brier": "low",
+    },
+    best_line_kwargs={"ls": "--", "lw": 2.0, "alpha": 0.9},
     # Metric title inside axes
-    metric_title_fontsize=22,           
-    metric_title_bbox={"facecolor": "white", "alpha": 0.9, "boxstyle": "round,pad=0.2", "edgecolor": "k"},             
+    metric_title_fontsize=22,
+    metric_title_bbox={
+        "facecolor": "white",
+        "alpha": 0.9,
+        "boxstyle": "round,pad=0.2",
+        "edgecolor": "k",
+    },
+    # FIX: control whether plot_kwargs["color"] can override palette
+    allow_case_color_override=False,
 ):
     """
-    Plot a multi-subpanel comparison of per-class metrics across an arbitrary number of cases.
-    One subplot per metric; within each subplot, x-axis = classes, and bars = cases.
+    Plot a multi-subpanel comparison of per-class metrics across cases.
 
-    Improvements:
-    - Shared x-axis across rows (internal rows hide x labels).
-    - Titles as in-axes text (top-left), customizable.
-    - Optional fixed number of y-ticks (ytick_count) or step-based ticks (ytick_step).
-    - Per-class best indicator lines colored by the winning case’s bar color.
+    One subplot per metric; within each subplot:
+    - x-axis = classes
+    - grouped bars = cases
 
-    Notes:
-    - "Accuracy" per class is taken as within-class accuracy, i.e., TPR/recall for that class.
-    - AUROC per class is computed one-vs-rest using the probability of that class.
-    - ECE per class is computed for the binary problem (class vs rest) using the predicted probability of that class.
-    - Brier per class is the mean squared error of the predicted probability for that class vs. the one-hot target for that class.
+    If `palette` is provided, colors are assigned in the order of `dict_cases.keys()`.
+    By default, `palette` has priority over colors stored in plot_kwargs.
+
+    Set `allow_case_color_override=True` only if you want each case's
+    plot_kwargs["color"] to override the palette.
     """
 
     if not dict_cases:
         raise ValueError("dict_cases must contain at least one case.")
 
-    # ---- Defaults for best-line logic ----
     if metric_best_high_low is None:
         metric_best_high_low = {}
-    # sensible defaults: low is better for ECE/Brier; high for others
+
     def _is_high_better(metric_name: str) -> bool:
         m = metric_name.lower()
         if m in ("ece", "brier", "brier score"):
@@ -1467,7 +1602,9 @@ def compare_models_performance_per_class(
     case_names = list(dict_cases.keys())
     n_cases = len(case_names)
 
-    # Determine classes and consistency
+    # ------------------------------------------------------------------
+    # Determine classes
+    # ------------------------------------------------------------------
     if class_names is None:
         all_y = np.concatenate([np.asarray(v["y_true"]) for v in dict_cases.values()])
         classes = np.unique(all_y)
@@ -1475,6 +1612,7 @@ def compare_models_performance_per_class(
     else:
         class_names_used = list(class_names)
         classes = np.arange(len(class_names_used))
+
     C = len(classes)
 
     for name, payload in dict_cases.items():
@@ -1482,52 +1620,122 @@ def compare_models_performance_per_class(
         if y_pred.ndim != 2 or y_pred.shape[1] != C:
             raise ValueError(f"[{name}] y_pred must be (N,{C}). Got {y_pred.shape}.")
 
-    # ---- Helpers for per-class ECE & Brier (binary, class-vs-rest) ----
+    # ------------------------------------------------------------------
+    # Palette handling
+    # ------------------------------------------------------------------
+    if palette is None:
+        palette = [plt.cm.tab10(i % 10) for i in range(n_cases)]
+    else:
+        palette = list(palette)
+        if len(palette) == 0:
+            raise ValueError("palette must contain at least one color.")
+
+    case_colors = []
+    case_labels = []
+
+    for k, nm in enumerate(case_names):
+        plot_kwargs = dict(dict_cases[nm].get("plot_kwargs", {}))
+
+        # FIX:
+        # Previously this was:
+        #     kw.get("color", palette[k])
+        # which means plot_kwargs["color"] silently overrides palette.
+        #
+        # Now palette is used by default whenever provided.
+        color_from_palette = palette[k % len(palette)]
+
+        if allow_case_color_override and "color" in plot_kwargs:
+            color = plot_kwargs["color"]
+        else:
+            color = color_from_palette
+
+        case_colors.append(color)
+        case_labels.append(plot_kwargs.get("label", nm))
+
+    # ------------------------------------------------------------------
+    # Helpers for per-class ECE & Brier
+    # ------------------------------------------------------------------
     def _brier_per_class(y_true, p):
         return float(np.mean((p - y_true.astype(float)) ** 2))
 
     def _ece_binary(y_true, p, n_bins=15, strategy="uniform"):
         y_true = np.asarray(y_true).astype(int)
         p = np.asarray(p).astype(float)
+
         if p.size == 0:
             return np.nan
+
         if strategy == "uniform":
             bins = np.linspace(0.0, 1.0, n_bins + 1)
         else:
             bins = np.quantile(p, np.linspace(0.0, 1.0, n_bins + 1))
             bins[0], bins[-1] = 0.0, 1.0
+
         bin_ids = np.digitize(p, bins) - 1
+        bin_ids = np.clip(bin_ids, 0, n_bins - 1)
+
         ece = 0.0
         N = len(p)
+
         for b in range(n_bins):
-            mask = (bin_ids == b)
+            mask = bin_ids == b
             if not np.any(mask):
                 continue
+
             conf_b = float(np.mean(p[mask]))
             acc_b = float(np.mean(y_true[mask]))
             ece += (np.sum(mask) / N) * abs(acc_b - conf_b)
+
         return float(ece)
 
-    # ---- Compute per-class metrics for each case ----
-    per_metric_vals = {m: np.full((C, n_cases), np.nan, dtype=float) for m in include_metrics}
+    # ------------------------------------------------------------------
+    # Compute metrics
+    # ------------------------------------------------------------------
+    per_metric_vals = {
+        m: np.full((C, n_cases), np.nan, dtype=float)
+        for m in include_metrics
+    }
 
     for j, (case, payload) in enumerate(dict_cases.items()):
         y_true = np.asarray(payload["y_true"])
         y_pred = np.asarray(payload["y_pred"])
         y_hat = np.argmax(y_pred, axis=1)
 
-        f1_vec  = f1_score(y_true, y_hat, average=None, zero_division=0)
-        rec_vec = recall_score(y_true, y_hat, average=None, zero_division=0)
-        prec_vec= precision_score(y_true, y_hat, average=None, zero_division=0)
+        # FIX:
+        # Explicit labels=classes ensures vectors always have length C,
+        # even if one class is absent in a particular split.
+        f1_vec = f1_score(
+            y_true,
+            y_hat,
+            labels=classes,
+            average=None,
+            zero_division=0,
+        )
+        rec_vec = recall_score(
+            y_true,
+            y_hat,
+            labels=classes,
+            average=None,
+            zero_division=0,
+        )
+        prec_vec = precision_score(
+            y_true,
+            y_hat,
+            labels=classes,
+            average=None,
+            zero_division=0,
+        )
 
         for i, cls in enumerate(classes):
-            # Accuracy per class = recall for that class
             if "Accuracy" in per_metric_vals:
                 per_metric_vals["Accuracy"][i, j] = rec_vec[i]
+
             if "F1" in per_metric_vals:
                 per_metric_vals["F1"][i, j] = f1_vec[i]
+
             if "TPR" in per_metric_vals:
                 per_metric_vals["TPR"][i, j] = rec_vec[i]
+
             if "Precision" in per_metric_vals:
                 per_metric_vals["Precision"][i, j] = prec_vec[i]
 
@@ -1542,75 +1750,87 @@ def compare_models_performance_per_class(
                         per_metric_vals["AUROC"][i, j] = np.nan
                 else:
                     per_metric_vals["AUROC"][i, j] = np.nan
+
             if "ECE" in per_metric_vals:
                 try:
                     per_metric_vals["ECE"][i, j] = _ece_binary(y_bin, p_cls)
                 except Exception:
                     per_metric_vals["ECE"][i, j] = np.nan
+
             if "Brier" in per_metric_vals:
                 try:
                     per_metric_vals["Brier"][i, j] = _brier_per_class(y_bin, p_cls)
                 except Exception:
                     per_metric_vals["Brier"][i, j] = np.nan
 
-    # ---- Figure & subpanels (shared x across rows) ----
+    # ------------------------------------------------------------------
+    # Figure
+    # ------------------------------------------------------------------
     M = len(include_metrics)
     ncols = ceil(M / nrows)
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize, sharex=True)
+
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=figsize,
+        sharex=True,
+    )
+
     if isinstance(axes, np.ndarray):
         axes = np.array(axes).reshape(nrows, ncols)
     else:
         axes = np.array([[axes]])
 
-    # colors per case (fallback to tab10)
-    if palette is None:
-        palette = [plt.cm.tab10(i % 10) for i in range(n_cases)]
-    case_colors = []
-    for k, nm in enumerate(case_names):
-        kw = dict(dict_cases[nm].get("plot_kwargs", {}))
-        case_colors.append(kw.get("color", palette[k]))
-    case_labels = [dict_cases[nm].get("plot_kwargs", {}).get("label", nm) for nm in case_names]
-
-    # x-axis: classes; grouped bars by case
     x = np.arange(C)
     width = min(group_width / max(n_cases, 1), 0.9 / max(n_cases, 1))
     offsets = (np.arange(n_cases) - (n_cases - 1) / 2.0) * width
 
-    # helper: split class labels in two lines
     def _two_line(name: str) -> str:
         s = str(name)
+
         if not two_line_class_xticklabels:
             return s
+
         splits = [i for i, ch in enumerate(s) if ch in (" ", "_", "-")]
+
         if not splits:
             return s
+
         center = len(s) / 2.0
         split_idx = min(splits, key=lambda i: abs(i - center))
-        return s[:split_idx] + "\n" + s[split_idx+1:]
+
+        return s[:split_idx] + "\n" + s[split_idx + 1:]
 
     xtick_labels = [_two_line(nm) for nm in class_names_used]
 
-    # default metric title bbox
     if metric_title_bbox is None:
-        metric_title_bbox = dict(facecolor="white", alpha=0.85, boxstyle="round,pad=0.2", edgecolor="none")
+        metric_title_bbox = {
+            "facecolor": "white",
+            "alpha": 0.85,
+            "boxstyle": "round,pad=0.2",
+            "edgecolor": "none",
+        }
 
-    # Draw each metric subplot
     for m_idx, metric in enumerate(include_metrics):
         r = m_idx // ncols
         c = m_idx % ncols
         ax = axes[r, c]
-        vals = per_metric_vals[metric]  # shape (C, n_cases)
 
-        # y-limits (explicit or auto)
+        vals = per_metric_vals[metric]
+
+        # y-limits
         if isinstance(y_ranges, dict) and metric in y_ranges:
             ymin, ymax = y_ranges[metric]
         else:
             finite = vals[np.isfinite(vals)]
+
             if finite.size:
                 ymin = float(min(0.0, np.min(finite)))
                 ymax = float(max(1.0, np.max(finite)))
+
                 if ymax - ymin < 1e-6:
                     ymax = ymin + 1.0
+
                 margin = y_margin_frac * (ymax - ymin)
                 ymin -= margin
                 ymax += margin
@@ -1619,84 +1839,112 @@ def compare_models_performance_per_class(
 
         # grouped bars
         for j in range(n_cases):
-            y_j = [vals[i, j] if np.isfinite(vals[i, j]) else 0.0 for i in range(C)]
+            y_j = [
+                vals[i, j] if np.isfinite(vals[i, j]) else 0.0
+                for i in range(C)
+            ]
+
             ax.bar(
-                x + offsets[j], y_j,
+                x + offsets[j],
+                y_j,
                 width=width,
                 color=case_colors[j],
                 edgecolor=bar_edgecolor,
                 alpha=bar_alpha,
+                label=case_labels[j] if m_idx == 0 else None,
             )
+
             if annotate_values:
                 for xi, yv in zip(x + offsets[j], y_j):
                     ax.text(
-                        xi, yv + 0.01 * (ymax - ymin),
+                        xi,
+                        yv + 0.01 * (ymax - ymin),
                         f"{yv:.3f}",
-                        ha="center", va="bottom", fontsize=value_label_fontsize
+                        ha="center",
+                        va="bottom",
+                        fontsize=value_label_fontsize,
                     )
 
-        # per-class best lines (short segments centered at each class tick)
+        # per-class best lines
         high_better = _is_high_better(metric)
+
         for i_cls in range(C):
             col = vals[i_cls, :]
+
             if not np.any(np.isfinite(col)):
                 continue
+
             if high_better:
                 j_best = int(np.nanargmax(col))
             else:
                 j_best = int(np.nanargmin(col))
+
             y_best = float(col[j_best])
-            # draw a short horizontal segment spanning the group at this class tick
-            x_left  = x[i_cls] - group_width / 2.0
+            x_left = x[i_cls] - group_width / 2.0
             x_right = x[i_cls] + group_width / 2.0
+
             line_kwargs = dict(best_line_kwargs)
-            line_kwargs["color"] = case_colors[j_best]  # color of the winning case
+            line_kwargs["color"] = case_colors[j_best]
+
             ax.hlines(y_best, x_left, x_right, **line_kwargs)
 
-        # cosmetics per subplot
         ax.set_ylim(ymin, ymax)
         ax.set_ylabel(ylabel_text)
 
-        # x ticks: class names (set only once; sharex propagates)
         ax.set_xticks(x)
-        ax.set_xticklabels(xtick_labels, rotation=0, fontsize=xtick_labels_fontsize)
-        ax.set_xlim(x[0] - group_width/2.0 - 0.2, x[-1] + group_width/2.0 + 0.2)
+        ax.set_xticklabels(
+            xtick_labels,
+            rotation=0,
+            fontsize=xtick_labels_fontsize,
+        )
+        ax.set_xlim(
+            x[0] - group_width / 2.0 - 0.2,
+            x[-1] + group_width / 2.0 + 0.2,
+        )
 
-        # y ticks: either fixed count or step-based
         if ytick_count is not None and ytick_count > 1:
             ax.yaxis.set_major_locator(mticker.MaxNLocator(ytick_count))
-        else:
+        elif ytick_step is not None:
             ax.yaxis.set_major_locator(mticker.MultipleLocator(ytick_step))
+
         ax.yaxis.set_major_formatter(mticker.StrMethodFormatter(ytick_format))
 
-        # titles as in-axes text (top-left)
         ax.text(
-            0.05, 0.90, str(metric),
+            0.05,
+            0.90,
+            str(metric),
             transform=ax.transAxes,
-            ha="left", va="top",
+            ha="left",
+            va="top",
             fontsize=metric_title_fontsize,
-            bbox=metric_title_bbox
+            bbox=metric_title_bbox,
         )
 
         ax.grid(False)
 
-    # hide any unused axes
+    # Hide unused axes
     for idx_extra in range(M, nrows * ncols):
         r = idx_extra // ncols
         c = idx_extra % ncols
         axes[r, c].axis("off")
 
-    # hide shared x tick labels for all but bottom row
+    # Hide shared x tick labels for internal rows
     for r in range(nrows - 1):
         for c in range(ncols):
-            axes[r, c].tick_params(axis="x", which="both", labelbottom=False)
+            axes[r, c].tick_params(
+                axis="x",
+                which="both",
+                labelbottom=False,
+            )
 
-    # figure title (no legend)
     if title:
         fig.suptitle(title, fontsize=14, y=0.995)
 
-    # reserve left margin so first y-label isn't clipped
-    fig.subplots_adjust(left=left_margin, hspace=subplot_hspace, wspace=subplot_wspace)
+    fig.subplots_adjust(
+        left=left_margin,
+        hspace=subplot_hspace,
+        wspace=subplot_wspace,
+    )
 
     if save_path is not None:
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)

@@ -17,10 +17,10 @@ data:
 # Model Architecture
 # ════════════════════════════════════════════════════════════════════
 models:
-  path_load: wandb_no_DA/my-sweep-0
+  path_load: wandb_no_DA/earthy-sweep-28
 
   encoder:
-    dropout_rates: [0.001, 0.001, 0.001]
+    dropout_rates: [0.001, 0.001]
     use_batchnorm: False
 
   downstream:

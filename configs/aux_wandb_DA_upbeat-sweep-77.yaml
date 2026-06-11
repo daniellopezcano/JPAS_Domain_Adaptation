@@ -17,10 +17,10 @@ data:
 # Model Architecture
 # ════════════════════════════════════════════════════════════════════
 models:
-  path_load: wandb_no_DA/olive-sweep-43
+  path_load: wandb_no_DA/upbeat-sweep-77
 
   encoder:
-    dropout_rates: [0.001, 0.001]
+    dropout_rates: [0.001, 0.001, 0.001]
     use_batchnorm: False
 
   downstream:

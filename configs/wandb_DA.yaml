@@ -12,11 +12,11 @@ parameters:
 
   aux_config_path:
     values: [
-      "aux_wandb_DA_my-sweep-0.yaml",
-      "aux_wandb_DA_leafy-sweep-59.yaml",
-      "aux_wandb_DA_revived-sweep-55.yaml",
-      "aux_wandb_DA_kind-sweep-46.yaml",
-      "aux_wandb_DA_olive-sweep-43.yaml"
+      "aux_wandb_DA_earthy-sweep-28.yaml",
+      "aux_wandb_DA_exalted-sweep-55.yaml",
+      "aux_wandb_DA_still-sweep-89.yaml",
+      "aux_wandb_DA_upbeat-sweep-77.yaml",
+      "aux_wandb_DA_vivid-sweep-20.yaml",
     ] 
 
   # ── Training Config ──

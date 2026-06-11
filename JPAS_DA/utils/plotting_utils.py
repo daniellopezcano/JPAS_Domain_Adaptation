@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 
@@ -16,6 +18,8 @@ from scipy.interpolate import interp1d
 
 from sklearn.metrics import f1_score
 
+import math
+from typing import Mapping, Sequence
 
 def matplotlib_default_config():
 
@@ -1126,9 +1130,7 @@ def plot_histogram_with_ranges_multiple(
     plt.tight_layout()
     return masks_all, stats_all
 
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
+
 
 def plot_per_class_counts_together(
     stats_magnitudes: dict,
@@ -1703,342 +1705,1327 @@ def plot_f1_difference_single_model(
         plt.show()
 
 
+
+
+
+        
+        
+        
+        
+        
+        
+        
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# =============================================================================
+# Simple probability-vs-redshift diagnostic plots
+# =============================================================================
+#
+# Main design:
+#
+#   1. Select data.
+#   2. Bin probabilities in redshift.
+#   3. Smooth the binned curve over the full smoothing range.
+#   4. Interpolate the smoothed curve.
+#   5. Plot the left and right sides of z_cut separately.
+#
+# This avoids the main bug-prone situation:
+#   - smoothing or plotting a single full curve,
+#   - then trying to visually split it afterward.
+#
+# =============================================================================
+
+import math
+from typing import Mapping, Sequence
+
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+
+from matplotlib.patches import Patch
+from scipy.interpolate import interp1d
+
+
+# =============================================================================
+# Basic configuration helpers
+# =============================================================================
+
+
+def _class_names() -> dict[int, str]:
+    """
+    Default class names used in legends.
+    """
+    return {
+        0: "QSO_high",
+        1: "QSO_low",
+        2: "GALAXY",
+        3: "STAR",
+    }
+
+
+def _class_color_dict(
+    class_colors: Sequence[str] | None,
+    n_classes: int,
+) -> dict[int, str | tuple]:
+    """
+    Return a dictionary mapping class_id -> color.
+
+    If class_colors is provided, those colors are used in order.
+    Otherwise, tab10 is used.
+    """
+    if class_colors is None:
+        cmap = plt.colormaps["tab10"]
+        return {i: cmap(i % 10) for i in range(n_classes)}
+
+    colors = {}
+
+    for i in range(n_classes):
+        if i < len(class_colors):
+            mpl.colors.to_rgb(class_colors[i])  # validate color
+            colors[i] = class_colors[i]
+        else:
+            colors[i] = plt.colormaps["tab10"](i % 10)
+
+    return colors
+
+
+def _ordered_unique(items):
+    """
+    Ordered unique list.
+    """
+    out = []
+
+    for item in items:
+        if item not in out:
+            out.append(item)
+
+    return out
+
+
+def _location_xy(loc: str) -> tuple[float, float, str, str]:
+    """
+    Convert strings like 'upper center' into axes coordinates.
+    """
+    x = 0.5 if "center" in loc else (0.02 if "left" in loc else 0.98)
+    y = 0.95 if "upper" in loc else (0.02 if "lower" in loc else 0.5)
+
+    ha = "center" if "center" in loc else ("left" if "left" in loc else "right")
+    va = "top" if "upper" in loc else ("bottom" if "lower" in loc else "center")
+
+    return x, y, ha, va
+
+
+# =============================================================================
+# Smoothing helpers
+# =============================================================================
+
+
+def _gaussian_kernel(sigma_bins: float) -> np.ndarray:
+    """
+    Build a normalized 1D Gaussian kernel.
+
+    sigma_bins is expressed in units of bins.
+    """
+    sigma_bins = float(sigma_bins)
+
+    if sigma_bins <= 0:
+        return np.array([1.0])
+
+    # Use a window of about +/- 3 sigma.
+    win = int(max(3, 6 * sigma_bins))
+
+    if win % 2 == 0:
+        win += 1
+
+    half = win // 2
+    x = np.arange(-half, half + 1, dtype=float)
+
+    kernel = np.exp(-0.5 * (x / sigma_bins) ** 2)
+    kernel /= kernel.sum()
+
+    return kernel
+
+
+def _interp_inside(y: np.ndarray) -> np.ndarray:
+    """
+    Interpolate NaNs only between the first and last finite value.
+
+    NaNs outside the finite support are left as NaN.
+    """
+    y = np.asarray(y, dtype=float)
+    x = np.arange(y.size)
+
+    finite = np.isfinite(y)
+
+    if finite.sum() < 2:
+        return y.copy()
+
+    i0, i1 = np.where(finite)[0][[0, -1]]
+
+    out = np.full_like(y, np.nan, dtype=float)
+    out[i0 : i1 + 1] = np.interp(
+        x[i0 : i1 + 1],
+        x[finite],
+        y[finite],
+    )
+
+    return out
+
+
+def _smooth_nan(
+    y: np.ndarray,
+    kernel: np.ndarray,
+) -> np.ndarray:
+    """
+    Smooth an array containing NaNs.
+
+    NaNs do not contribute to the local weighted average.
+    """
+    y = np.asarray(y, dtype=float)
+
+    finite = np.isfinite(y)
+
+    if finite.sum() == 0:
+        return y.copy()
+
+    half = len(kernel) // 2
+
+    y_pad = np.pad(
+        np.where(finite, y, 0.0),
+        (half, half),
+        mode="edge",
+    )
+
+    w_pad = np.pad(
+        finite.astype(float),
+        (half, half),
+        mode="edge",
+    )
+
+    y_conv = np.convolve(y_pad, kernel, mode="valid")
+    w_conv = np.convolve(w_pad, kernel, mode="valid")
+
+    out = np.full_like(y_conv, np.nan, dtype=float)
+
+    ok = w_conv > 1e-12
+    out[ok] = y_conv[ok] / w_conv[ok]
+
+    return out
+
+
+# =============================================================================
+# Data extraction and binned statistics
+# =============================================================================
+
+
+def _resolve_true_classes_for_curve(
+    case: Mapping,
+    true_classes_for_curves,
+):
+    """
+    Decide which true classes are used to build each probability curve.
+
+    Recommended default:
+        true_classes_for_curves=(0, 1)
+
+    This means:
+        for each predicted/target class, compute the curve using all QSO objects,
+        both high-z and low-z.
+
+    Other options:
+        true_classes_for_curves=None
+            Use all true classes.
+
+        true_classes_for_curves="case"
+            Use case["true_class_id"].
+            This reproduces the old true-class-specific behavior.
+    """
+    if true_classes_for_curves is None:
+        return None
+
+    if true_classes_for_curves == "case":
+        if "true_class_id" not in case:
+            raise KeyError(
+                "true_classes_for_curves='case' requires each case to contain "
+                "'true_class_id'."
+            )
+        return [int(case["true_class_id"])]
+
+    return [int(c) for c in true_classes_for_curves]
+
+
+def _extract_curve_data(
+    yy,
+    probs,
+    case: Mapping,
+    *,
+    x_key: str,
+    x_range: tuple[float, float],
+    y_prob_range: tuple[float, float],
+    true_classes_for_curves=(0, 1),
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Extract x and predicted-class probability for one curve.
+
+    One curve corresponds to one target/predicted class:
+        target_class_id = case["target_class_id"]
+
+    By default, the objects used to compute the curve are true QSO objects:
+        true_classes_for_curves=(0, 1)
+
+    This is usually what we want for the probability-vs-redshift diagnostic:
+        - color = predicted class;
+        - dashed/solid = left/right of z_cut;
+        - no duplicated curves for true low/high classes.
+    """
+    km = case["key_model"]
+    kd = case["key_domain"]
+    ks = case["key_split"]
+
+    target_class = int(case["target_class_id"])
+
+    ydict = yy[kd][ks]
+
+    P = np.asarray(probs[km][kd][ks])
+    y_true = np.asarray(ydict["SPECTYPE_int"])
+    x = np.asarray(ydict[x_key], dtype=float)
+
+    if P.ndim != 2:
+        raise ValueError(f"P must be 2D. Got P.shape={P.shape}.")
+
+    if P.shape[0] != x.size or x.size != y_true.size:
+        raise ValueError(
+            f"Shape mismatch for model={km}, domain={kd}, split={ks}. "
+            f"P.shape={P.shape}, x.size={x.size}, y_true.size={y_true.size}."
+        )
+
+    if target_class >= P.shape[1]:
+        raise ValueError(
+            f"Probability array for {km}/{kd}/{ks} has no column "
+            f"{target_class}."
+        )
+
+    xmin, xmax = x_range
+    selected_true_classes = _resolve_true_classes_for_curve(
+        case,
+        true_classes_for_curves,
+    )
+
+    mask = (
+        np.isfinite(x)
+        & (x >= xmin)
+        & (x <= xmax)
+        & np.isfinite(P[:, target_class])
+    )
+
+    if selected_true_classes is not None:
+        mask &= np.isin(y_true, selected_true_classes)
+
+    x_sel = x[mask]
+
+    p_sel = np.clip(
+        P[mask, target_class],
+        y_prob_range[0],
+        y_prob_range[1],
+    )
+
+    return x_sel, p_sel
+
+
+def _binned_median_std(
+    x: np.ndarray,
+    y: np.ndarray,
+    edges: np.ndarray,
+    *,
+    min_per_bin: int,
+    scale_std_fill: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute binned median and scaled standard deviation.
+
+    med[k] and std[k] correspond to bin k.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    nbins = len(edges) - 1
+
+    med = np.full(nbins, np.nan)
+    std = np.full(nbins, np.nan)
+
+    bin_id = np.digitize(x, edges) - 1
+    bin_id = np.clip(bin_id, 0, nbins - 1)
+
+    for k in range(nbins):
+        vals = y[bin_id == k]
+
+        if vals.size >= min_per_bin:
+            med[k] = np.nanmedian(vals)
+
+            if vals.size > 1:
+                std[k] = scale_std_fill * np.nanstd(vals, ddof=1)
+            else:
+                std[k] = 0.0
+
+    return med, std
+
+
+def _build_smoothed_interpolators(
+    x: np.ndarray,
+    p: np.ndarray,
+    *,
+    smoothing_x_range: tuple[float, float],
+    nbins: int,
+    min_per_bin: int,
+    scale_std_fill: float,
+    smooth_sigma_bins: float,
+):
+    """
+    Convert scattered probabilities into smoothed interpolation functions.
+
+    Returns
+    -------
+    med_interp : callable or None
+        Interpolator for the smoothed median probability.
+
+    std_interp : callable or None
+        Interpolator for the smoothed scatter band.
+
+    debug : dict
+        Useful intermediate arrays.
+    """
+    sxmin, sxmax = smoothing_x_range
+
+    edges = np.linspace(sxmin, sxmax, nbins + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    med, std = _binned_median_std(
+        x,
+        p,
+        edges,
+        min_per_bin=min_per_bin,
+        scale_std_fill=scale_std_fill,
+    )
+
+    # Fill internal holes before smoothing.
+    med_filled = _interp_inside(med)
+    std_filled = _interp_inside(std)
+
+    kernel = _gaussian_kernel(smooth_sigma_bins)
+
+    med_smooth = _smooth_nan(med_filled, kernel)
+    std_smooth = _smooth_nan(std_filled, kernel)
+
+    ok_med = np.isfinite(med_smooth)
+
+    if ok_med.sum() < 2:
+        return None, None, {
+            "centers": centers,
+            "med": med,
+            "std": std,
+            "med_smooth": med_smooth,
+            "std_smooth": std_smooth,
+        }
+
+    med_interp = interp1d(
+        centers[ok_med],
+        med_smooth[ok_med],
+        bounds_error=False,
+        fill_value=np.nan,
+    )
+
+    ok_std = np.isfinite(std_smooth)
+
+    if ok_std.sum() >= 2:
+        std_interp = interp1d(
+            centers[ok_std],
+            std_smooth[ok_std],
+            bounds_error=False,
+            fill_value=np.nan,
+        )
+    else:
+        std_interp = None
+
+    debug = {
+        "centers": centers,
+        "med": med,
+        "std": std,
+        "med_smooth": med_smooth,
+        "std_smooth": std_smooth,
+    }
+
+    return med_interp, std_interp, debug
+
+
+# =============================================================================
+# Plotting helpers
+# =============================================================================
+
+
+def _plot_segment(
+    ax,
+    med_interp,
+    std_interp,
+    *,
+    x0: float,
+    x1: float,
+    n_points: int,
+    color,
+    linestyle: str,
+    linewidth: float,
+    y_prob_range: tuple[float, float],
+    show_band: bool,
+    band_alpha: float,
+    zorder_line: int = 5,
+    zorder_band: int = 2,
+):
+    """
+    Plot exactly one x-segment [x0, x1].
+
+    This function never plots outside [x0, x1].
+    Therefore, if we call it once for [xmin, z_cut] and once for
+    [z_cut, xmax], the curve cannot go beyond the threshold.
+    """
+    x0 = float(x0)
+    x1 = float(x1)
+
+    if not np.isfinite(x0) or not np.isfinite(x1):
+        return
+
+    if x1 <= x0:
+        return
+
+    n_points = max(int(n_points), 2)
+
+    x_plot = np.linspace(x0, x1, n_points)
+    med_plot = med_interp(x_plot)
+
+    ok_line = np.isfinite(med_plot)
+
+    if ok_line.sum() < 2:
+        return
+
+    y0, y1 = y_prob_range
+
+    if show_band and std_interp is not None:
+        std_plot = std_interp(x_plot)
+        ok_band = ok_line & np.isfinite(std_plot)
+
+        if ok_band.sum() >= 2:
+            ax.fill_between(
+                x_plot[ok_band],
+                np.clip(med_plot[ok_band] - std_plot[ok_band], y0, y1),
+                np.clip(med_plot[ok_band] + std_plot[ok_band], y0, y1),
+                color=color,
+                alpha=band_alpha,
+                edgecolor="none",
+                zorder=zorder_band,
+            )
+
+    # Important:
+    # capstyle="butt" prevents visual overshoot at x0/x1.
+    ax.plot(
+        x_plot,
+        med_plot,
+        color=color,
+        linestyle=linestyle,
+        lw=linewidth,
+        solid_capstyle="butt",
+        dash_capstyle="butt",
+        clip_on=True,
+        zorder=zorder_line,
+    )
+
+
+def _plot_smoothed_curve_left_right(
+    ax,
+    med_interp,
+    std_interp,
+    *,
+    x_range: tuple[float, float],
+    z_cut: float | None,
+    color,
+    linewidth: float,
+    y_prob_range: tuple[float, float],
+    n_plot: int,
+    show_band: bool,
+    band_alpha: float,
+    split_at_z_cut: bool = True,
+    left_linestyle: str = "--",
+    right_linestyle: str = "-",
+    fallback_linestyle: str = "-",
+):
+    """
+    Plot a smoothed curve.
+
+    If split_at_z_cut=True:
+        - left segment:  [xmin, z_cut] is dashed;
+        - right segment: [z_cut, xmax] is solid.
+
+    The segments are drawn separately, so neither side can extend beyond z_cut.
+    """
+    xmin, xmax = map(float, x_range)
+
+    if xmax <= xmin:
+        raise ValueError(f"x_range must satisfy xmax > xmin. Got {x_range}.")
+
+    # If no split is requested, draw one full segment.
+    if (not split_at_z_cut) or (z_cut is None) or (not np.isfinite(z_cut)):
+        _plot_segment(
+            ax,
+            med_interp,
+            std_interp,
+            x0=xmin,
+            x1=xmax,
+            n_points=n_plot,
+            color=color,
+            linestyle=fallback_linestyle,
+            linewidth=linewidth,
+            y_prob_range=y_prob_range,
+            show_band=show_band,
+            band_alpha=band_alpha,
+        )
+        return
+
+    z_cut = float(z_cut)
+
+    # Entire visible range is left of the cut.
+    if xmax <= z_cut:
+        _plot_segment(
+            ax,
+            med_interp,
+            std_interp,
+            x0=xmin,
+            x1=xmax,
+            n_points=n_plot,
+            color=color,
+            linestyle=left_linestyle,
+            linewidth=linewidth,
+            y_prob_range=y_prob_range,
+            show_band=show_band,
+            band_alpha=band_alpha,
+        )
+        return
+
+    # Entire visible range is right of the cut.
+    if xmin >= z_cut:
+        _plot_segment(
+            ax,
+            med_interp,
+            std_interp,
+            x0=xmin,
+            x1=xmax,
+            n_points=n_plot,
+            color=color,
+            linestyle=right_linestyle,
+            linewidth=linewidth,
+            y_prob_range=y_prob_range,
+            show_band=show_band,
+            band_alpha=band_alpha,
+        )
+        return
+
+    # The visible range straddles the cut.
+    #
+    # Allocate plotting points proportionally to the length of each side.
+    full_width = xmax - xmin
+    left_width = z_cut - xmin
+    right_width = xmax - z_cut
+
+    n_left = max(2, int(n_plot * left_width / full_width))
+    n_right = max(2, int(n_plot * right_width / full_width))
+
+    # Left side: exactly [xmin, z_cut].
+    _plot_segment(
+        ax,
+        med_interp,
+        std_interp,
+        x0=xmin,
+        x1=z_cut,
+        n_points=n_left,
+        color=color,
+        linestyle=left_linestyle,
+        linewidth=linewidth,
+        y_prob_range=y_prob_range,
+        show_band=show_band,
+        band_alpha=band_alpha,
+    )
+
+    # Right side: exactly [z_cut, xmax].
+    _plot_segment(
+        ax,
+        med_interp,
+        std_interp,
+        x0=z_cut,
+        x1=xmax,
+        n_points=n_right,
+        color=color,
+        linestyle=right_linestyle,
+        linewidth=linewidth,
+        y_prob_range=y_prob_range,
+        show_band=show_band,
+        band_alpha=band_alpha,
+    )
+
+
+# =============================================================================
+# PPV helper
+# =============================================================================
+
+
+def _ppv_percentages(
+    yy,
+    probs,
+    triples: Sequence[tuple[str, str, str]],
+    *,
+    class_ids: Sequence[int] = (0, 1),
+) -> dict[tuple[str, str, str], dict[int, float]]:
+    """
+    Compute PPV = TP / (TP + FP), in percent.
+
+    This is computed over the full selected model/domain/split.
+    """
+    stats = {}
+
+    for km, kd, ks in _ordered_unique(triples):
+        P = np.asarray(probs[km][kd][ks])
+        y_true = np.asarray(yy[kd][ks]["SPECTYPE_int"])
+
+        if P.ndim != 2 or P.shape[0] != y_true.size:
+            raise ValueError(
+                f"Shape mismatch while computing PPV for {km}/{kd}/{ks}."
+            )
+
+        y_pred = np.argmax(P, axis=1)
+
+        stats[(km, kd, ks)] = {}
+
+        for cls in class_ids:
+            cls = int(cls)
+
+            predicted_as_class = y_pred == cls
+            true_positives = predicted_as_class & (y_true == cls)
+
+            n_pred = int(predicted_as_class.sum())
+            n_tp = int(true_positives.sum())
+
+            stats[(km, kd, ks)][cls] = np.nan if n_pred == 0 else 100.0 * n_tp / n_pred
+
+    return stats
+
+
+def _ppv_text(
+    ppv: Mapping[tuple[str, str, str], Mapping[int, float]],
+    *,
+    labels: Mapping[int, str] | None,
+    title: str,
+    decimals: int,
+) -> str:
+    """
+    Build the PPV annotation text.
+    """
+    default_names = _class_names()
+    lines = []
+
+    for (_km, _kd, _ks), values in ppv.items():
+        parts = []
+
+        for cls, val in values.items():
+            if labels is not None:
+                label = labels.get(cls, default_names.get(cls, str(cls)))
+            else:
+                label = default_names.get(cls, str(cls))
+
+            pct = "n/a" if not np.isfinite(val) else f"{val:.{decimals}f}%"
+            parts.append(f"{label}: {pct}")
+
+        lines.append(f"{title}: " + " | ".join(parts))
+
+    return "\n".join(lines)
+
+
+# =============================================================================
+# Case handling
+# =============================================================================
+
+
+def _deduplicate_cases_by_predicted_class(
+    cases: Sequence[Mapping],
+) -> list[dict]:
+    """
+    Keep only one curve per:
+        model/domain/split/target_class_id
+
+    This is useful if the old input contains both:
+        true_class_id=0, target_class_id=k
+        true_class_id=1, target_class_id=k
+
+    In the simplified logic, those should usually become one curve for
+    predicted class k, computed using true_classes_for_curves=(0, 1).
+    """
+    out = []
+    seen = set()
+
+    for case in cases:
+        key = (
+            case["key_model"],
+            case["key_domain"],
+            case["key_split"],
+            int(case["target_class_id"]),
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        out.append(dict(case))
+
+    return out
+
+
+# =============================================================================
+# Main single-panel plotting function
+# =============================================================================
+
+
 def plot_overlay_prob_vs_x(
     yy,
     probs,
-    cases,
+    cases: Sequence[Mapping],
     *,
-    x_key="REDSHIFT",
-    x_range=(0.0, 5.0),
-    y_prob_range=(0.0, 1.0),
-    nbins=511,
-    min_per_bin=1,
-    include_scatter=True,
-    scatter_size=0.01,
-    scatter_alpha=0.35,
-    scatter_subsample=None,
-    band_alpha=0.25,
-    scale_std_fill=1/3,
-    smooth_curves=True,
-    smooth_kind="gaussian",
-    smooth_sigma_bins=1.5,
-    smooth_win_bins=None,
-    plot_unsmoothed=False,
-    curve_upsample=1,
-    kde2d=True,
-    kde2d_nx=400,
-    kde2d_ny=200,
-    kde2d_eps=1.0,
-    kde2d_alpha_cap=0.7,
-    kde2d_bw_method=None,
-    kde2d_subsample=None,
-    rng_seed=None,
-    class_names=None,
-    n_classes=4,
-    pred_color_by_class=None,
-    true_ls_by_class=None,
-    x_label=None,
-    y_label="Probability",
-    vlines=(2.1,),
-    hlines=(0.5,),
-    figsize=(12, 5),
+    # Data and x-axis
+    x_key: str = "REDSHIFT",
+    x_range: tuple[float, float] = (0.0, 5.0),
+    smoothing_x_range: tuple[float, float] | None = None,
+    true_classes_for_curves=(0, 1),
+    deduplicate_by_predicted_class: bool = True,
+    # Probability axis
+    y_prob_range: tuple[float, float] = (0.0, 1.0),
+    # Binning and smoothing
+    nbins: int = 511,
+    min_per_bin: int = 1,
+    smooth_sigma_bins: float = 1.5,
+    scale_std_fill: float = 1.0 / 3.0,
+    # Plotting density
+    n_plot: int = 800,
+    # Colors
+    class_colors: Sequence[str] | None = None,
+    n_classes: int = 4,
+    # Lines
+    z_cut: float | None = 2.1,
+    split_at_z_cut: bool = True,
+    left_linestyle: str = "--",
+    right_linestyle: str = "-",
+    linewidth: float = 3.0,
+    # Bands
+    show_band: bool = True,
+    band_alpha: float = 0.25,
+    # PPV annotation
+    show_qso_ppv: bool = True,
+    qso_ppv_labels: Mapping[int, str] | None = None,
+    qso_ppv_classes: Sequence[int] = (0, 1),
+    qso_ppv_title: str = "PPV",
+    qso_ppv_decimals: int = 1,
+    qso_ppv_fontsize: int = 11,
+    qso_ppv_loc: str = "upper center",
+    # Legends
+    show_legends: bool = True,
+    pred_legend_loc: str = "upper right",
+    style_legend_loc: str = "lower left",
+    # Labels and decorations
+    x_label: str | None = None,
+    y_label: str = "Probability",
+    panel_title: str | None = None,
+    vlines: Sequence[float] = (2.1,),
+    hlines: Sequence[float] = (0.5,),
+    # Figure
+    figsize: tuple[float, float] = (12, 5),
+    ax=None,
+    tight_layout: bool = True,
+    return_debug: bool = False,
 ):
-
     """
-    Overlay plot for multiple 'cases'. Each case contributes:
-      • global 2D KDE heatmap over (x_key, probability of target_class_id)
-      • scatter of (x_key, probability)
-      • binned median ± std curve (shared x bins across cases)
+    Plot predicted-class probability curves versus redshift.
 
-    'cases' is a list of dicts with keys:
-        key_domain, key_split, key_model, true_class_id, target_class_id
-      and optional 'marker'.
+    Simplified interpretation
+    -------------------------
+    Each plotted curve corresponds to one predicted/target class:
+        P(target_class | object)
+
+    By default, the curve is computed using true QSO objects:
+        true_classes_for_curves=(0, 1)
+
+    Therefore, if cases contains duplicated entries for true_class_id=0 and
+    true_class_id=1, they are deduplicated by target_class_id.
+
+    The final curve is:
+        - computed and smoothed over smoothing_x_range;
+        - plotted only over x_range;
+        - drawn dashed on the left of z_cut;
+        - drawn solid on the right of z_cut.
+
+    The left and right pieces are plotted separately, so the dashed line cannot
+    contain points to the right of z_cut, and the solid line cannot contain
+    points to the left of z_cut.
     """
-    # ---------- helpers ----------
-    def _make_kernel(kind, win_bins, sigma_bins):
-        if kind == "boxcar":
-            win = max(3, int(win_bins))
-            if win % 2 == 0:
-                win += 1
-            k = np.ones(win, dtype=float)
-        else:  # gaussian
-            win = int(win_bins) if win_bins is not None else int(max(3, 6 * sigma_bins))
-            if win % 2 == 0:
-                win += 1
-            half = win // 2
-            x = np.arange(-half, half + 1, dtype=float)
-            k = np.exp(-0.5 * (x / float(sigma_bins)) ** 2)
-        k /= k.sum()
-        return k
+    if not cases:
+        raise ValueError("cases must contain at least one case.")
 
-    def _conv_smooth_nan(y, kernel):
-        # Edge-padded normalized convolution → preserves x-range
-        y = np.asarray(y, float)
-        m = np.isfinite(y)
-        if m.sum() == 0:
-            return y.copy()
-        yf = np.where(m, y, 0.0)
-        w  = np.where(m, 1.0, 0.0)
-        h = len(kernel) // 2
-        yf_pad = np.pad(yf, (h, h), mode="edge")
-        w_pad  = np.pad(w,  (h, h), mode="edge")
-        y_conv = np.convolve(yf_pad, kernel, mode="valid")
-        w_conv = np.convolve(w_pad,  kernel, mode="valid")
-        out = np.full_like(y_conv, np.nan, dtype=float)
-        ok = w_conv > 1e-12
-        out[ok] = y_conv[ok] / w_conv[ok]
-        return out
+    if smoothing_x_range is None:
+        smoothing_x_range = x_range
 
-    def _interp_inside(y):
-        # Fill NaNs only inside the valid span (keeps edges untouched)
-        y = np.asarray(y, float)
-        idx = np.arange(y.size)
-        m = np.isfinite(y)
-        if m.sum() < 2:
-            return y
-        y_out = np.full_like(y, np.nan, dtype=float)
-        i0, i1 = np.where(m)[0][[0, -1]]
-        y_out[i0:i1+1] = np.interp(idx[i0:i1+1], idx[m], y[m])
-        return y_out
+    colors = _class_color_dict(class_colors, n_classes)
+    class_names = _class_names()
 
-    def make_alpha_cmap(color, name="alpha_cmap", max_alpha=kde2d_alpha_cap):
-        rgba0 = (1.0, 1.0, 1.0, 0.0)
-        r, g, b = mpl.colors.to_rgb(color)
-        rgba1 = (r, g, b, max_alpha)
-        return mpl.colors.LinearSegmentedColormap.from_list(name, [rgba0, rgba1], N=256)
+    if deduplicate_by_predicted_class:
+        plot_cases = _deduplicate_cases_by_predicted_class(cases)
+    else:
+        plot_cases = [dict(c) for c in cases]
 
-    # ---------- config defaults ----------
-    if class_names is None:
-        class_names = {0: "QSO_high", 1: "QSO_low", 2: "GALAXY", 3: "STAR"}
-    if true_ls_by_class is None:
-        true_ls_by_class = {0: "-", 1: "--"}
-    if pred_color_by_class is None:
-        tab10 = np.array(plt.cm.get_cmap("tab10").colors[:n_classes])
-        pred_color_by_class = {
-            0: tab10[0],
-            1: tab10[1],
-            2: tab10[2] if n_classes > 2 else tab10[0],
-            3: tab10[3] if n_classes > 3 else tab10[1],
-        }
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+        owns_fig = True
+    else:
+        fig = ax.figure
+        owns_fig = False
+
+    valid_cases = []
+    debug_records = []
+
+    # -------------------------------------------------------------------------
+    # Main loop: one curve per target/predicted class
+    # -------------------------------------------------------------------------
+    for case in plot_cases:
+        target_class = int(case["target_class_id"])
+        color = colors.get(target_class, "C0")
+
+        # 1. Extract data over the smoothing range.
+        x_sel, p_sel = _extract_curve_data(
+            yy,
+            probs,
+            case,
+            x_key=x_key,
+            x_range=smoothing_x_range,
+            y_prob_range=y_prob_range,
+            true_classes_for_curves=true_classes_for_curves,
+        )
+
+        if x_sel.size == 0:
+            print(f"[warning] Empty selection for case: {case}")
+            continue
+
+        # 2. Build the smoothed curve interpolators.
+        med_interp, std_interp, debug = _build_smoothed_interpolators(
+            x_sel,
+            p_sel,
+            smoothing_x_range=smoothing_x_range,
+            nbins=nbins,
+            min_per_bin=min_per_bin,
+            scale_std_fill=scale_std_fill,
+            smooth_sigma_bins=smooth_sigma_bins,
+        )
+
+        if med_interp is None:
+            print(f"[warning] Could not build smoothed curve for case: {case}")
+            continue
+
+        # 3. Plot left and right of z_cut separately.
+        _plot_smoothed_curve_left_right(
+            ax,
+            med_interp,
+            std_interp,
+            x_range=x_range,
+            z_cut=z_cut,
+            color=color,
+            linewidth=linewidth,
+            y_prob_range=y_prob_range,
+            n_plot=n_plot,
+            show_band=show_band,
+            band_alpha=band_alpha,
+            split_at_z_cut=split_at_z_cut,
+            left_linestyle=left_linestyle,
+            right_linestyle=right_linestyle,
+            fallback_linestyle="-",
+        )
+
+        valid_cases.append(case)
+
+        debug_records.append(
+            {
+                "case": case,
+                "x_selected": x_sel,
+                "p_selected": p_sel,
+                **debug,
+            }
+        )
+
+    if not valid_cases:
+        raise RuntimeError("No valid cases to plot after filtering.")
+
+    # -------------------------------------------------------------------------
+    # Axes
+    # -------------------------------------------------------------------------
+    xmin, xmax = x_range
+    y0, y1 = y_prob_range
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(y0, y1)
+
     if x_label is None:
         x_label = "Redshift" if x_key.upper() == "REDSHIFT" else x_key
 
-    rng = np.random.default_rng(rng_seed)
-
-    # ---------- prepare selections ----------
-    if x_range is not None:
-        xmin, xmax = x_range
-    else:
-        xmin = xmax = None
-
-    prepared = []  # list of (x_sel, p_sel, cfg)
-    for cfg in cases:
-        kd, ks, km = cfg["key_domain"], cfg["key_split"], cfg["key_model"]
-        ydict = yy[kd][ks]
-        P = probs[km][kd][ks]  # (N, C)
-
-        spectype = np.asarray(ydict["SPECTYPE_int"])
-        x = np.asarray(ydict[x_key]).astype(float)
-        tc_true = int(cfg["true_class_id"])
-        tc_tgt  = int(cfg["target_class_id"])
-
-        assert P.ndim == 2 and P.shape[0] == x.shape[0] == spectype.shape[0], "Shape mismatch"
-        assert P.shape[1] > tc_tgt, f"probs has no column {tc_tgt}"
-
-        base = (spectype == tc_true) & np.isfinite(x)
-        x_sel = x[base]
-        p_sel = P[base, tc_tgt]
-        finite = np.isfinite(p_sel)
-        x_sel, p_sel = x_sel[finite], p_sel[finite]
-        # Keep probabilities in [0,1] if needed
-        p_sel = np.clip(p_sel, y_prob_range[0], y_prob_range[1])
-
-        if x_range is not None:
-            rng_mask = (x_sel >= xmin) & (x_sel <= xmax)
-            x_sel, p_sel = x_sel[rng_mask], p_sel[rng_mask]
-
-        if x_sel.size == 0:
-            print(f"[warning] No samples for true {class_names.get(tc_true, tc_true)} in {kd}/{ks}/{km} after masking; skipping.")
-            prepared.append(None)
-            continue
-
-        prepared.append((x_sel, p_sel, cfg))
-
-    if not any(item is not None for item in prepared):
-        raise RuntimeError("No valid cases to plot after filtering.")
-
-    if x_range is None:
-        xmin = float(np.nanmin([np.nanmin(xs) for item in prepared if item is not None for xs in [item[0]]]))
-        xmax = float(np.nanmax([np.nanmax(xs) for item in prepared if item is not None for xs in [item[0]]]))
-    if not (np.isfinite(xmin) and np.isfinite(xmax) and xmin < xmax):
-        raise ValueError("Invalid x_range or x data.")
-
-    # Shared x-bins for med/std
-    edges   = np.linspace(xmin, xmax, nbins + 1)
-    centers = 0.5 * (edges[:-1] + edges[1:])
-
-    # 2D KDE grid
-    y0, y1 = y_prob_range
-    if kde2d_ny < 2 or kde2d_nx < 2:
-        kde2d = False
-    x_grid = np.linspace(xmin, xmax, kde2d_nx)
-    y_grid = np.linspace(y0, y1,   kde2d_ny)
-    Xg, Yg = np.meshgrid(x_grid, y_grid)
-    pos = np.vstack([Xg.ravel(), Yg.ravel()])  # shape (2, NX*NY)
-
-    # ---------- plot ----------
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
-
-    # --- Global 2D KDE per case ---
-    if kde2d:
-        for item in prepared:
-            if item is None:
-                continue
-            x_sel, p_sel, cfg = item
-            tgt = int(cfg["target_class_id"])
-            color = pred_color_by_class.get(tgt, "C0")
-
-            # Optional subsampling
-            if (kde2d_subsample is not None) and (x_sel.size > kde2d_subsample):
-                idx = rng.choice(x_sel.size, size=kde2d_subsample, replace=False)
-                x_use = x_sel[idx]
-                p_use = p_sel[idx]
-            else:
-                x_use, p_use = x_sel, p_sel
-
-            # Build KDE over (x, p)
-            vals = np.vstack([x_use, p_use])
-            try:
-                kde = sp.gaussian_kde(vals, bw_method=kde2d_bw_method)
-                d = kde(pos).reshape(Yg.shape)  # (ny, nx)
-            except np.linalg.LinAlgError:
-                # Fallback: separable Gaussian using sample mean/std
-                mu_x, mu_y = float(np.mean(x_use)), float(np.mean(p_use))
-                sx = max(1e-6, float(np.std(x_use))) * 0.5
-                sy = max(1e-6, float(np.std(p_use))) * 0.5
-                d = np.exp(-0.5 * ((Xg - mu_x) / sx) ** 2) * np.exp(-0.5 * ((Yg - mu_y) / sy) ** 2)
-                d /= (2 * np.pi * sx * sy)
-
-            # Log + normalize per CASE for visibility
-            d_log = np.log10(d + kde2d_eps)
-            dmin, dmax = np.nanmin(d_log), np.nanmax(d_log)
-            normed = (d_log - dmin) / (dmax - dmin) if dmax > dmin else np.zeros_like(d_log)
-
-            cmap = make_alpha_cmap(color, name=f"cmap_case_{tgt}", max_alpha=kde2d_alpha_cap)
-            ax.imshow(
-                normed, origin="lower",
-                extent=[xmin, xmax, y0, y1],
-                cmap=cmap, interpolation="bilinear", aspect="auto"
-            )
-
-    # --- Scatter + SMOOTHED median ± std bands ---
-    kernel = _make_kernel(smooth_kind, smooth_win_bins, smooth_sigma_bins) if smooth_curves else None
-
-    for item in prepared:
-        if item is None:
-            continue
-        x_sel, p_sel, cfg = item
-
-        tgt = int(cfg["target_class_id"])
-        tru = int(cfg["true_class_id"])
-        color  = pred_color_by_class.get(tgt, "C0")
-        ls     = true_ls_by_class.get(tru, "-")
-        marker = cfg.get("marker", "o")
-
-        if include_scatter:
-            xs, ys = x_sel, p_sel
-            # Subsample scatter per case if requested
-            if (scatter_subsample is not None) and (xs.size > scatter_subsample):
-                idx = rng.choice(xs.size, size=scatter_subsample, replace=False)
-                xs, ys = xs[idx], ys[idx]
-            ax.scatter(xs, ys, s=scatter_size, alpha=scatter_alpha,
-                       color=color, marker=marker, linewidth=0)
-
-        # Bin-wise median & std (shared edges)
-        b = np.digitize(x_sel, edges) - 1
-        b = np.clip(b, 0, nbins - 1)
-        med = np.full(nbins, np.nan); std = np.full(nbins, np.nan)
-
-        for k in range(nbins):
-            idx = (b == k)
-            if idx.sum() >= min_per_bin:
-                vals = p_sel[idx]
-                med[k] = np.nanmedian(vals)
-                std[k] = scale_std_fill * np.nanstd(vals, ddof=1) if idx.sum() > 1 else 0.0
-
-        # Interpolate inside span, smooth, upsample
-        med_i = _interp_inside(med)
-        std_i = _interp_inside(std)
-
-        if smooth_curves and kernel is not None:
-            med_s = _conv_smooth_nan(med_i, kernel)
-            std_s = _conv_smooth_nan(std_i, kernel)
-        else:
-            med_s, std_s = med_i, std_i
-
-        x_lo = float(np.nanmin(x_sel))
-        x_hi = float(np.nanmax(x_sel))
-        n_dense = max(nbins * curve_upsample, 200)
-        x_dense = np.linspace(x_lo, x_hi, n_dense)
-
-        m_ok = np.isfinite(med_s)
-        s_ok = np.isfinite(std_s)
-        if m_ok.sum() >= 2:
-            f_med = interp1d(centers[m_ok], med_s[m_ok], kind="linear", bounds_error=False, fill_value=np.nan)
-            med_dense = f_med(x_dense)
-        else:
-            med_dense = np.full_like(x_dense, np.nan)
-
-        if s_ok.sum() >= 2:
-            f_std = interp1d(centers[s_ok], std_s[s_ok], kind="linear", bounds_error=False, fill_value=np.nan)
-            std_dense = f_std(x_dense)
-        else:
-            std_dense = np.full_like(x_dense, np.nan)
-
-        if plot_unsmoothed:
-            ok0 = np.isfinite(med)
-            if np.any(ok0):
-                ax.plot(centers[ok0], med[ok0], color=color, linestyle=ls, lw=0.8, alpha=0.4)
-
-        ok = np.isfinite(med_dense)
-        if np.any(ok):
-            low = np.clip(med_dense[ok] - std_dense[ok], y0, y1)
-            hig = np.clip(med_dense[ok] + std_dense[ok], y0, y1)
-            ax.plot(x_dense[ok], med_dense[ok], color=color, linestyle=ls, lw=1.6)
-            ax.fill_between(x_dense[ok], low, hig, color=color, alpha=band_alpha, edgecolor="none")
-
-    # Cosmetics
-    ax.set_xlim(xmin, xmax)
-    ax.set_ylim(y0, y1)
     ax.set_xlabel(x_label, fontsize=20)
     ax.set_ylabel(y_label, fontsize=20)
 
-    for xv in (vlines or []):
-        ax.axvline(xv, c="k", ls=":", lw=2)
-    for yv in (hlines or []):
-        ax.axhline(yv, c="k", ls=":", lw=2)
+    if panel_title is not None:
+        ax.set_title(panel_title, fontsize=16)
 
+    # Draw reference lines at the end, so the threshold is visually clean.
+    for xv in vlines or []:
+        ax.axvline(
+            xv,
+            color="k",
+            linestyle=":",
+            lw=2,
+            zorder=20,
+            solid_capstyle="butt",
+            dash_capstyle="butt",
+        )
+
+    for yv in hlines or []:
+        ax.axhline(
+            yv,
+            color="k",
+            linestyle=":",
+            lw=2,
+            zorder=3,
+            solid_capstyle="butt",
+            dash_capstyle="butt",
+        )
+
+    # -------------------------------------------------------------------------
+    # PPV box
+    # -------------------------------------------------------------------------
+    ppv = {}
+
+    if show_qso_ppv:
+        triples = [
+            (
+                c["key_model"],
+                c["key_domain"],
+                c["key_split"],
+            )
+            for c in valid_cases
+        ]
+
+        ppv = _ppv_percentages(
+            yy,
+            probs,
+            triples,
+            class_ids=qso_ppv_classes,
+        )
+
+        x_txt, y_txt, ha, va = _location_xy(qso_ppv_loc)
+
+        ax.text(
+            x_txt,
+            y_txt,
+            _ppv_text(
+                ppv,
+                labels=qso_ppv_labels,
+                title=qso_ppv_title,
+                decimals=qso_ppv_decimals,
+            ),
+            transform=ax.transAxes,
+            ha=ha,
+            va=va,
+            fontsize=qso_ppv_fontsize,
+            bbox=dict(
+                boxstyle="round,pad=0.35",
+                facecolor="white",
+                edgecolor="0.75",
+                alpha=0.95,
+            ),
+            zorder=30,
+        )
+
+    # -------------------------------------------------------------------------
     # Legends
-    used_tgts  = sorted({int(cfg["target_class_id"]) for cfg in [c for c in cases]})
-    used_trues = sorted({int(cfg["true_class_id"])  for cfg in [c for c in cases]})
+    # -------------------------------------------------------------------------
+    if show_legends:
+        used_targets = sorted(
+            {
+                int(c["target_class_id"])
+                for c in valid_cases
+            }
+        )
 
-    pred_handles = [
-        Patch(facecolor=pred_color_by_class.get(t, "C0"),
-              edgecolor=pred_color_by_class.get(t, "C0"),
-              label=f"P({class_names.get(t, t)})")
-        for t in used_tgts
-    ]
-    leg_pred = ax.legend(handles=pred_handles, loc="upper right", fontsize=16,
-                         frameon=True, fancybox=True, shadow=True)
-    ax.add_artist(leg_pred)
+        pred_handles = [
+            Patch(
+                facecolor=colors.get(t, "C0"),
+                edgecolor=colors.get(t, "C0"),
+                label=f"P({class_names.get(t, t)})",
+            )
+            for t in used_targets
+        ]
 
-    true_handles = [
-        mpl.lines.Line2D([0], [0], color="k", lw=2.0, linestyle=true_ls_by_class.get(t, "-"),
-                         label=f"True: {class_names.get(t, t)}")
-        for t in used_trues
-    ]
-    ax.legend(handles=true_handles, loc="center right", fontsize=16,
-              frameon=True, fancybox=True, shadow=True)
+        pred_leg = ax.legend(
+            handles=pred_handles,
+            loc=pred_legend_loc,
+            fontsize=14,
+            frameon=True,
+            fancybox=True,
+            shadow=True,
+            title="Predicted class",
+        )
 
-    plt.tight_layout()
+        ax.add_artist(pred_leg)
+
+        if split_at_z_cut and z_cut is not None:
+            style_handles = [
+                mpl.lines.Line2D(
+                    [0],
+                    [0],
+                    color="k",
+                    lw=2,
+                    linestyle=left_linestyle,
+                    label=rf"$z < {z_cut:g}$",
+                    solid_capstyle="butt",
+                    dash_capstyle="butt",
+                ),
+                mpl.lines.Line2D(
+                    [0],
+                    [0],
+                    color="k",
+                    lw=2,
+                    linestyle=right_linestyle,
+                    label=rf"$z \geq {z_cut:g}$",
+                    solid_capstyle="butt",
+                    dash_capstyle="butt",
+                ),
+            ]
+
+            ax.legend(
+                handles=style_handles,
+                loc=style_legend_loc,
+                fontsize=14,
+                frameon=True,
+                fancybox=True,
+                shadow=True,
+                title="Redshift region",
+            )
+
+    if tight_layout and owns_fig:
+        fig.tight_layout()
+
+    if return_debug:
+        return fig, ax, {
+            "ppv": ppv,
+            "debug_records": debug_records,
+            "valid_cases": valid_cases,
+        }
+
     return fig, ax
+
+
+# =============================================================================
+# Multipanel wrapper
+# =============================================================================
+
+
+def _cases_for_panel(
+    base_cases: Sequence[Mapping],
+    panel_spec: Mapping,
+) -> list[dict]:
+    """
+    Combine base case definitions with one panel specification.
+
+    base_cases usually define target_class_id.
+    panel_spec defines key_model, key_domain, and key_split.
+    """
+    required = (
+        "key_model",
+        "key_domain",
+        "key_split",
+    )
+
+    missing = [
+        key
+        for key in required
+        if key not in panel_spec
+    ]
+
+    if missing:
+        raise KeyError(f"panel_spec is missing required keys: {missing}")
+
+    panel_cases = []
+
+    for base in base_cases:
+        case = dict(base)
+
+        case["key_model"] = panel_spec["key_model"]
+        case["key_domain"] = panel_spec["key_domain"]
+        case["key_split"] = panel_spec["key_split"]
+
+        panel_cases.append(case)
+
+    return panel_cases
+
+
+def plot_prob_vs_x_multipanel(
+    yy,
+    probs,
+    panel_specs: Sequence[Mapping],
+    base_cases: Sequence[Mapping],
+    *,
+    ncols: int = 2,
+    figsize: tuple[float, float] | None = None,
+    sharex: bool = True,
+    sharey: bool = True,
+    common_legends: bool = True,
+    legend_panel_index: int = 0,
+    suptitle: str | None = None,
+    tight_layout: bool = True,
+    **plot_kwargs,
+):
+    """
+    Create a multipanel probability-vs-redshift diagnostic.
+
+    Panel-specific overrides can be passed with keys beginning with 'plot__'.
+
+    Example
+    -------
+    panel_specs = [
+        {
+            "title": "Zoom panel",
+            "key_model": "DA",
+            "key_domain": "JPAS_x_DESI_Raul",
+            "key_split": "test",
+            "plot__x_range": (2.05, 2.15),
+            "plot__smoothing_x_range": (0.0, 5.0),
+        },
+    ]
+    """
+    n_panels = len(panel_specs)
+
+    if n_panels == 0:
+        raise ValueError("panel_specs must contain at least one panel.")
+
+    ncols = max(1, int(ncols))
+    nrows = int(math.ceil(n_panels / ncols))
+
+    if figsize is None:
+        figsize = (
+            7.5 * ncols,
+            4.5 * nrows,
+        )
+
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=figsize,
+        sharex=sharex,
+        sharey=sharey,
+        squeeze=False,
+    )
+
+    axes_flat = axes.ravel()
+    diagnostics = []
+
+    for i, spec in enumerate(panel_specs):
+        kwargs_i = dict(plot_kwargs)
+
+        # Panel-level plot overrides.
+        for key, value in spec.items():
+            if key.startswith("plot__"):
+                kwargs_i[key.removeprefix("plot__")] = value
+
+        show_legends = (
+            not common_legends
+            or (i == legend_panel_index)
+        )
+
+        result = plot_overlay_prob_vs_x(
+            yy,
+            probs,
+            _cases_for_panel(base_cases, spec),
+            ax=axes_flat[i],
+            panel_title=spec.get("title"),
+            show_legends=show_legends,
+            tight_layout=False,
+            return_debug=True,
+            **kwargs_i,
+        )
+
+        _fig_i, _ax_i, debug_i = result
+        diagnostics.append(debug_i)
+
+    # Hide unused axes.
+    for ax in axes_flat[n_panels:]:
+        ax.set_visible(False)
+
+    # Remove repeated labels.
+    if sharex:
+        for i, ax in enumerate(axes_flat[:n_panels]):
+            row = i // ncols
+
+            if row < nrows - 1:
+                ax.set_xlabel("")
+                ax.tick_params(axis="x", which="both", labelbottom=False)
+
+    if sharey:
+        for i, ax in enumerate(axes_flat[:n_panels]):
+            col = i % ncols
+
+            if col > 0:
+                ax.set_ylabel("")
+
+    if suptitle:
+        fig.suptitle(
+            suptitle,
+            fontsize=18,
+            y=0.995,
+        )
+
+    if tight_layout:
+        fig.tight_layout(
+            rect=[0, 0, 1, 0.97] if suptitle else None
+        )
+
+    return fig, axes_flat[:n_panels], diagnostics
+
+
+plot_prob_vs_z_tetraptych = plot_prob_vs_x_multipanel

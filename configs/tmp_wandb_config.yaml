@@ -9,7 +9,7 @@ data:
   - SPECTYPE_int
   key_survey_training: JPAS_x_DESI_Raul
 models:
-  path_load: wandb_no_DA/kind-sweep-46
+  path_load: wandb_no_DA/upbeat-sweep-77
   encoder:
     dropout_rates:
     - 0.001
@@ -31,9 +31,9 @@ training:
   seed_mode: deterministic
   seed: 137
   device: cuda
-  l2_lambda: 4.199420477983193e-07
-  NN_batches_per_epoch: 7384
-  batch_size: 15145
-  lr: 0.07263880684298872
-  weight_decay: 0.00016302271411089796
-  clip_grad_norm: 5.358438367628115e-05
+  l2_lambda: 0.0007571588272829245
+  NN_batches_per_epoch: 10870
+  batch_size: 10278
+  lr: 0.0229900773484252
+  weight_decay: 0.09586144971852996
+  clip_grad_norm: 0.14758992140352414

@@ -287,7 +287,7 @@ If you use this code or build on this work, please cite both the paper and the r
   author  = {L{\'o}pez-Cano, Daniel},
   year    = {2026},
   url     = {https://github.com/daniellopezcano/JPAS_Domain_Adaptation},
-  doi     = {PLACEHOLDER -- 10.5281/zenodo.XXXXXXX}
+  doi     = {10.5281/zenodo.20690843}
 }
 ```
 

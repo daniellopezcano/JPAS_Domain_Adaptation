@@ -1,0 +1,47 @@
+global:
+  N_threads: 8
+data:
+  cleaning_config: default_global_setup
+  keys_xx:
+  - all_observations_normalized
+  - MORPHTYPE_int
+  keys_yy:
+  - SPECTYPE_int
+  key_survey_training: DESI_mocks_Raul
+models:
+  path_load: null
+  encoder:
+    hidden_layers:
+    - 512
+    - 128
+    - 64
+    dropout_rates:
+    - 0.2
+    - 0.2
+    - 0.2
+    output_dim: 26
+  downstream:
+    hidden_layers:
+    - 64
+    - 128
+    - 512
+    dropout_rates:
+    - 0.2
+    - 0.2
+    - 0.2
+training:
+  path_save: default_global_setup
+  default_overwrite: false
+  sampling_strategy: true_random
+  freeze_downstream_model: false
+  NN_epochs: 2500
+  batch_size_val: 15597
+  seed_mode: deterministic
+  seed: 137
+  device: cuda
+  l2_lambda: 9.511249590205526e-07
+  NN_batches_per_epoch: 15290
+  batch_size: 68065
+  lr: 0.0013131040358103094
+  weight_decay: 0.0007550306640342303
+  clip_grad_norm: 10.994238534962957

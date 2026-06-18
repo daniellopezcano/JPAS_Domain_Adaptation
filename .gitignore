@@ -136,6 +136,7 @@ Thumbs.db
 # Project-specific
 # =============================================================================
 
+DATA_private/
 DATA/
 notebooks/wandb/
 SAVED_FIGURES/
